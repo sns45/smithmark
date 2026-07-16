@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.25, cobra, `sigstore/sigstore-go`, `in-toto/in-toto-golang`, `CycloneDX/cyclonedx-go`, `cyberphone/json-canonicalization` (RFC 8785), `oras-project/oras-go`, `gopkg.in/yaml.v3`, goreleaser.
 
-**Normative inputs:** `requirements.md` (the spec; section references below are to it) and `docs/decisions.md` (approved decisions D1 to D6, U1 to U7). Where this plan and those documents disagree, the spec wins, then decisions, then this plan.
+**Normative inputs:** `requirements.md` (the spec; section references below are to it) and `docs/decisions.md` (approved decisions D1 to D7, U1 to U7; D7 records the M0 gate outcome and its watch items). Where this plan and those documents disagree, the spec wins, then decisions, then this plan.
 
 ## Global Constraints
 
