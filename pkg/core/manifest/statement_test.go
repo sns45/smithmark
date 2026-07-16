@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -79,21 +80,50 @@ func skillRef(t *testing.T) ArtifactRef {
 	}
 }
 
-// (a) NewStatement rejects a ref whose kind or name disagrees with the
-// predicate artifact block.
+// (a) NewStatement rejects a ref that disagrees with the predicate artifact
+// block: a kind disagreement keeps the surface mismatch code, while name,
+// version, and source disagreements use the statement subject mismatch code.
 func TestNewStatementRejectsRefManifestMismatch(t *testing.T) {
-	m := validManifest()
-
-	kindMismatch := mcpRef()
-	kindMismatch.Kind = KindSkill
-	if _, err := NewStatement(kindMismatch, m); err == nil || !strings.Contains(err.Error(), codes.ManifestKindSurfaceMismatch) {
-		t.Errorf("kind mismatch: expected error mentioning %s, got %v", codes.ManifestKindSurfaceMismatch, err)
+	cases := []struct {
+		name   string
+		mutate func(r *ArtifactRef)
+		want   string
+	}{
+		{"kind mismatch", func(r *ArtifactRef) { r.Kind = KindSkill }, codes.ManifestKindSurfaceMismatch},
+		{"name mismatch", func(r *ArtifactRef) { r.Name = "some-other-server" }, codes.StatementSubjectMismatch},
+		{"version mismatch", func(r *ArtifactRef) { r.Version = "9.9.9" }, codes.StatementSubjectMismatch},
+		{"source mismatch", func(r *ArtifactRef) { r.Source = SourcePyPI }, codes.StatementSubjectMismatch},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := mcpRef()
+			tc.mutate(&ref)
+			if _, err := NewStatement(ref, validManifest()); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("expected error mentioning %s, got %v", tc.want, err)
+			}
+		})
+	}
+}
 
-	nameMismatch := mcpRef()
-	nameMismatch.Name = "some-other-server"
-	if _, err := NewStatement(nameMismatch, m); err == nil || !strings.Contains(err.Error(), codes.ManifestKindSurfaceMismatch) {
-		t.Errorf("name mismatch: expected error mentioning %s, got %v", codes.ManifestKindSurfaceMismatch, err)
+// NewStatement refuses a ref whose digest set is nil, empty, or malformed.
+func TestNewStatementRejectsBadRefDigest(t *testing.T) {
+	cases := []struct {
+		name   string
+		digest DigestSet
+	}{
+		{"nil digest", nil},
+		{"empty digest", DigestSet{}},
+		{"uppercase hex", DigestSet{"sha512": "AB"}},
+		{"odd length", DigestSet{"sha512": "abc"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := mcpRef()
+			ref.Digest = tc.digest
+			if _, err := NewStatement(ref, validManifest()); err == nil || !strings.Contains(err.Error(), codes.DigestInvalid) {
+				t.Errorf("expected error mentioning %s, got %v", codes.DigestInvalid, err)
+			}
+		})
 	}
 }
 
@@ -168,6 +198,10 @@ func TestParseStatementStrict(t *testing.T) {
 			`"_type"`, `"extra":1,"_type"`, 1),
 		"unknown nested field": strings.Replace(string(good),
 			`"env":[]`, `"env":[],"sneaky":true`, 1),
+		"empty subject digest": strings.Replace(string(good),
+			`"digest":{"sha512":"`+strings.Repeat("13", 64)+`"}`, `"digest":{}`, 1),
+		"non hex subject digest": strings.Replace(string(good),
+			strings.Repeat("13", 64), "NOT HEX", 1),
 	}
 	for name, doc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -266,5 +300,51 @@ func TestSubjectDigestFromBundle(t *testing.T) {
 func TestSubjectDigestFromBundleRejectsWrongPrefix(t *testing.T) {
 	if _, err := SubjectDigestFromBundle("sha256:" + strings.Repeat("aa", 32)); err == nil {
 		t.Error("wrong prefix accepted; SubjectDigestFromBundle must reject it")
+	}
+}
+
+// After the prefix check the remainder must be exactly sixty four lowercase
+// hex characters.
+func TestSubjectDigestFromBundleRejectsMalformedRemainder(t *testing.T) {
+	cases := map[string]string{
+		"non hex remainder": "smithmark-bundle-v1:nothex!!",
+		"short remainder":   "smithmark-bundle-v1:" + strings.Repeat("aa", 16),
+		"uppercase hex":     "smithmark-bundle-v1:" + strings.Repeat("AA", 32),
+		"empty remainder":   "smithmark-bundle-v1:",
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := SubjectDigestFromBundle(in); err == nil || !strings.Contains(err.Error(), codes.DigestInvalid) {
+				t.Errorf("expected error mentioning %s, got %v", codes.DigestInvalid, err)
+			}
+		})
+	}
+}
+
+// TestStatementRoundTrip proves that Canonical and ParseStatement compose to
+// the identity: the parsed value equals the original, and canonicalizing the
+// parsed value reproduces the first canonical bytes exactly.
+func TestStatementRoundTrip(t *testing.T) {
+	original, err := NewStatement(mcpRef(), validManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := original.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseStatement(first)
+	if err != nil {
+		t.Fatalf("ParseStatement on canonical bytes: %v", err)
+	}
+	if !reflect.DeepEqual(parsed, original) {
+		t.Errorf("round trip changed the statement\n got: %+v\nwant: %+v", parsed, original)
+	}
+	second, err := parsed.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(second) != string(first) {
+		t.Errorf("re canonicalizing the parsed statement is not byte identical\n got: %s\nwant: %s", second, first)
 	}
 }

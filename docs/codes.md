@@ -26,6 +26,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `TRANSPORT_INVALID` | validation | An MCP transport is not stdio, http, or sse. | M1 |
 | `MODE_INVALID` | validation | A file mode is not regular or executable. | M1 |
 | `DIGEST_INVALID` | validation | A digest set is empty, has an empty key, or has a value that is not lowercase hex of even length. | M1 |
+| `STATEMENT_SUBJECT_MISMATCH` | validation | The artifact reference handed to statement assembly disagrees with the predicate artifact block on name, version, or source. | M1 |
 | `BUNDLE_EMPTY` | validation | A skill bundle was given no files to digest. | M1 |
 | `BUNDLE_PATH_INVALID` | validation | A bundle file path is not a clean relative path using forward slashes. | M1 |
 | `BUNDLE_DUPLICATE_PATH` | validation | Two entries in a bundle share the same path. | M1 |

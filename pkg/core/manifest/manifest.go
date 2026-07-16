@@ -502,15 +502,19 @@ func NewStatement(ref ArtifactRef, m *CapabilityManifest) (*Statement, error) {
 	}
 	if ref.Name != m.Artifact.Name {
 		return nil, fmt.Errorf("%s: ref name %q does not match predicate artifact name %q",
-			codes.ManifestKindSurfaceMismatch, ref.Name, m.Artifact.Name)
+			codes.StatementSubjectMismatch, ref.Name, m.Artifact.Name)
 	}
 	if ref.Version != m.Artifact.Version {
 		return nil, fmt.Errorf("%s: ref version %q does not match predicate artifact version %q",
-			codes.ManifestKindSurfaceMismatch, ref.Version, m.Artifact.Version)
+			codes.StatementSubjectMismatch, ref.Version, m.Artifact.Version)
 	}
 	if ref.Source != m.Artifact.Source {
 		return nil, fmt.Errorf("%s: ref source %q does not match predicate artifact source %q",
-			codes.ManifestKindSurfaceMismatch, ref.Source, m.Artifact.Source)
+			codes.StatementSubjectMismatch, ref.Source, m.Artifact.Source)
+	}
+	if !validDigestSet(ref.Digest) {
+		return nil, fmt.Errorf("%s: ref digest must be a non empty digest set with non empty keys and lowercase hex values of even length",
+			codes.DigestInvalid)
 	}
 
 	return &Statement{
@@ -525,6 +529,8 @@ func NewStatement(ref ArtifactRef, m *CapabilityManifest) (*Statement, error) {
 // pypi packages, with a leading @scope percent encoded as %40scope; the
 // plain artifact name for skills, and for every other source, which covers
 // an oci image reference given verbatim in ref.Name (spec 2.3, decision D6).
+// Plain name for the local and mcp-registry sources is a default chosen
+// here, not a spec mandated case.
 func subjectName(ref ArtifactRef) string {
 	if ref.Kind == KindSkill {
 		return ref.Name
@@ -583,21 +589,36 @@ func ParseStatement(data []byte) (*Statement, error) {
 	if len(s.Subject) == 0 {
 		return nil, errors.New("statement parse: subject must not be empty")
 	}
+	for i, sub := range s.Subject {
+		if !validDigestSet(sub.Digest) {
+			return nil, fmt.Errorf("%s: statement parse: subject[%d] digest must be a non empty digest set with non empty keys and lowercase hex values of even length",
+				codes.DigestInvalid, i)
+		}
+	}
 	if s.Predicate == nil {
 		return nil, errors.New("statement parse: predicate must not be nil")
 	}
 	return &s, nil
 }
 
+// bundleDigestHexLen is the length of the hex remainder of a bundle digest:
+// a sha256 sum encoded as lowercase hex.
+const bundleDigestHexLen = 64
+
 // SubjectDigestFromBundle converts the prefixed output of bundle.Digest into
 // a DigestSet suitable for a statement subject: the key is
 // "smithmark-bundle-v1" and the value is the bare lowercase hex digest with
 // the prefix stripped, since a DigestSet value must be hex only (decisions
-// D6 and U6). It is strict about the expected prefix.
+// D6 and U6). It is strict about the expected prefix and about the remainder
+// being exactly sixty four lowercase hex characters.
 func SubjectDigestFromBundle(prefixed string) (DigestSet, error) {
 	if !strings.HasPrefix(prefixed, bundle.Prefix) {
 		return nil, fmt.Errorf("SubjectDigestFromBundle: expected prefix %q, got %q", bundle.Prefix, prefixed)
 	}
 	digestHex := strings.TrimPrefix(prefixed, bundle.Prefix)
+	if len(digestHex) != bundleDigestHexLen || !hexDigest.MatchString(digestHex) {
+		return nil, fmt.Errorf("%s: bundle digest value must be exactly %d lowercase hex characters, got %q",
+			codes.DigestInvalid, bundleDigestHexLen, digestHex)
+	}
 	return DigestSet{bundleDigestKey: digestHex}, nil
 }

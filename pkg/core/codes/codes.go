@@ -51,6 +51,11 @@ const (
 	// DigestInvalid reports a digest set that is empty, has an empty key, or
 	// has a value that is not lowercase hex of even length.
 	DigestInvalid = "DIGEST_INVALID"
+	// StatementSubjectMismatch reports that the artifact reference handed to
+	// statement assembly disagrees with the predicate artifact block on name,
+	// version, or source. Kind disagreements keep using
+	// ManifestKindSurfaceMismatch, since kind is what selects the surface.
+	StatementSubjectMismatch = "STATEMENT_SUBJECT_MISMATCH"
 )
 
 // Skill bundle digest codes (spec 4). Task 1.4 defines these ahead of the
@@ -172,6 +177,7 @@ func All() []string {
 		TransportInvalid,
 		ModeInvalid,
 		DigestInvalid,
+		StatementSubjectMismatch,
 		BundleEmpty,
 		BundlePathInvalid,
 		BundleDuplicatePath,
