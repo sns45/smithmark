@@ -192,7 +192,9 @@ const (
 	// generate a dependency SBOM could not be found.
 	SBOMForgesealMissing = "SBOM_FORGESEAL_MISSING"
 	// SBOMForgesealVersionUnsupported reports that the installed forgeseal
-	// binary is older than the minimum version this build requires.
+	// binary is older than the minimum version this build requires, or that
+	// its reported version string could not be parsed as semver at all;
+	// "dev" (a maintainer's own local build) is always accepted.
 	SBOMForgesealVersionUnsupported = "SBOM_FORGESEAL_VERSION_UNSUPPORTED"
 	// RefUnmappable reports that an artifact name could not be mapped to a
 	// valid OCI repository path segment.

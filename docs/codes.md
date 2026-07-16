@@ -55,8 +55,8 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `UNDECLARED_ENV` | finding | Detected code reads an environment variable the manifest does not declare; reserved for M4. | M1 |
 | `TOOL_LISTING_MISMATCH` | finding | The declared MCP tool listing disagrees with the tools extracted from the live server; reserved for M4. | M1 |
 | `SIGNING_UNAVAILABLE_PLATFORM` | operational | Signing could not proceed because the current platform lacks a required signing capability; reserved for M2. | M1 |
-| `SBOM_FORGESEAL_MISSING` | operational | The forgeseal binary required to generate a dependency SBOM could not be found; reserved for M2. | M1 |
-| `SBOM_FORGESEAL_VERSION_UNSUPPORTED` | operational | The installed forgeseal binary is older than the minimum version this build requires; reserved for M2. | M1 |
+| `SBOM_FORGESEAL_MISSING` | operational | The forgeseal binary required to generate a dependency SBOM could not be found on PATH. | M1 |
+| `SBOM_FORGESEAL_VERSION_UNSUPPORTED` | operational | The installed forgeseal binary is older than the minimum version this build requires, or its reported version string could not be parsed as semver at all; "dev" is always accepted. | M1 |
 | `REF_UNMAPPABLE` | operational | An artifact name could not be mapped to a valid OCI repository path segment; reserved for M2 and M3. | M1 |
 | `ATTESTATION_BASE_UNKNOWN` | operational | No attestation base registry could be resolved from the flag, the environment variable, or the package.json key; reserved for M2 and M3. | M1 |
 | `TOOL_EXTRACTION_FAILED` | operational | Extracting the MCP tool listing from a running stdio server failed: the process could not be started or exited unexpectedly, the protocol handshake did not match, or the context deadline was exceeded before tools/list returned. | M2 |
