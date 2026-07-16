@@ -28,3 +28,20 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+  # Proves the wasip1 carried constraint (spec 2.1): the signing layer's stub
+  # compiles under GOOS=wasip1 and sigstore-go stays out of the wasip1
+  # dependency graph. sigstore-go does not compile for wasip1, so if it ever
+  # leaked past the //go:build !wasip1 tag this build would fail. Ubuntu only;
+  # the check is platform independent, so one runner suffices.
+  wasip1-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: wasip1 build check
+        run: GOOS=wasip1 GOARCH=wasm go build ./pkg/...

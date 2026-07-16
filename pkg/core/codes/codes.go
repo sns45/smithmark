@@ -213,6 +213,13 @@ const (
 	// exited unexpectedly, the protocol handshake did not match, or the
 	// context deadline was exceeded before tools/list returned.
 	ToolExtractionFailed = "TOOL_EXTRACTION_FAILED"
+	// SigningConfigInvalid reports that a signing request carried no usable
+	// signing configuration: neither a key path for key based signing nor the
+	// full set of keyless inputs (Fulcio, Rekor, an OIDC issuer, and an
+	// identity token). It is distinct from SigningUnavailablePlatform, which
+	// means the platform itself cannot sign; this code means the platform can
+	// sign but the caller told it nothing to sign with.
+	SigningConfigInvalid = "SIGNING_CONFIG_INVALID"
 )
 
 // All returns every registered code.
@@ -267,5 +274,6 @@ func All() []string {
 		RefUnmappable,
 		AttestationBaseUnknown,
 		ToolExtractionFailed,
+		SigningConfigInvalid,
 	}
 }
