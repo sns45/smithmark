@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/sns45/smithmark/pkg/core/codes"
 	"github.com/sns45/smithmark/pkg/core/manifest"
@@ -126,6 +127,13 @@ type toolsListResult struct {
 // with as much of the process's stderr as stderrCaptureLimit retained,
 // folded into the detail message.
 //
+// Callers must pass a context with a deadline. With context.Background(),
+// a server that streams endless notifications without ever answering a
+// request would keep ExtractTools reading until the scanner's buffer limit
+// errors on an oversized line, or indefinitely if every line stays small;
+// the deadline is what bounds a merely unhelpful server, not just a hung
+// one.
+//
 // Security posture (decision U2): ExtractTools executes the command it is
 // given. smithmark attest may call this, because a maker attesting their own
 // artifact is running their own code by design. smithmark verify and
@@ -143,6 +151,12 @@ func ExtractTools(ctx context.Context, command []string) ([]manifest.ToolDecl, [
 	// tears down a grandchild the command forked, exactly like the explicit
 	// termination below does.
 	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	// WaitDelay bounds the final cmd.Wait below: a descendant that escaped
+	// the process group (a double fork, or a setsid call of its own) can
+	// survive killProcessTree while holding the inherited stderr write end,
+	// and Wait would otherwise block forever on that never closing pipe.
+	// After this delay Wait force closes the pipes and returns.
+	cmd.WaitDelay = 3 * time.Second
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -235,6 +249,14 @@ func speakMCP(stdin io.Writer, stdout io.Reader) ([]manifest.ToolDecl, error) {
 // digesting each inputSchema with manifest.SchemaDigest. It is shared
 // verbatim between ExtractTools and ToolsFromFile, since --tools-from must
 // map identically to a live extraction (U2).
+//
+// An empty listing maps to a non nil empty slice and is accepted here by
+// design: downstream manifest validation owns whether a tool less MCP
+// surface is acceptable, not this adapter. A tool with an absent inputSchema
+// fails the whole extraction deliberately, via SchemaDigest rejecting the
+// empty schema: MCP requires inputSchema on every tool, so a server that
+// omits it is committing a protocol violation this package surfaces loudly
+// rather than papering over with a placeholder digest.
 func mapWireTools(wire []wireTool) ([]manifest.ToolDecl, error) {
 	tools := make([]manifest.ToolDecl, 0, len(wire))
 	for _, t := range wire {
