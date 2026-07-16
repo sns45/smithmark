@@ -20,7 +20,7 @@ Amendment 2026-07-16: filesystem path patterns reject dotdot segments and backsl
 
 Exec adapter in v0.1; library import later.
 
-Evidence: forgeseal exports no packages (all logic sits under `internal/`), so a library import is impossible today. `pkg/compose` shells out to `forgeseal sbom --lockfile <path> --output <file>`, strict parses the CycloneDX JSON with cyclonedx-go, and enforces a minimum forgeseal version via `forgeseal version`. A missing binary fails `attest` with a machine readable code; an explicit `--skip-sbom` produces a manifest with no dependencies block, and verify then reports informational `DEPENDENCY_SBOM_MISSING`. The adapter sits behind an interface so the future swap to a library import is contained to one file.
+Evidence: forgeseal exports no packages (all logic sits under `internal/`), so a library import is impossible today. `pkg/compose` shells out to `forgeseal sbom --dir <projectDir> --output <file>` (the upstream `--lockfile` flag exists but the adapter passes the project directory instead), strict parses the CycloneDX JSON with cyclonedx-go, and enforces a minimum forgeseal version via `forgeseal version`. A missing binary fails `attest` with a machine readable code; an explicit `--skip-sbom` produces a manifest with no dependencies block, and verify then reports informational `DEPENDENCY_SBOM_MISSING`. The adapter sits behind an interface so the future swap to a library import is contained to one file.
 
 **Follow up**: file a gh issue on `sns45/forgeseal` requesting an exported `pkg/sbom` facade over `internal/sbom.Generator` plus lockfile detection. File it when the adapter lands in M2. Filed: https://github.com/sns45/forgeseal/issues/26
 

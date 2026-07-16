@@ -93,8 +93,10 @@ func NewForgesealCLI() SBOMGenerator {
 // adapter cannot parse as semver at all, both return
 // codes.SBOMForgesealVersionUnsupported, with the raw version string folded
 // into the detail either way; "dev" is always accepted regardless of this
-// gate. A BOM that fails strict CycloneDX parsing is always a returned
-// error, never silently passed through to the digest step.
+// gate. A BOM that fails strict CycloneDX parsing, or that decodes but
+// lacks the CycloneDX bomFormat marker or a specVersion, returns
+// codes.SBOMForgesealOutputInvalid, never a silent pass through to the
+// digest step.
 func (forgesealCLI) Generate(ctx context.Context, projectDir string) (*SBOMResult, error) {
 	path, err := exec.LookPath("forgeseal")
 	if err != nil {
@@ -127,7 +129,21 @@ func (forgesealCLI) Generate(ctx context.Context, projectDir string) (*SBOMResul
 
 	var bom cdx.BOM
 	if err := cdx.NewBOMDecoder(bytes.NewReader(raw), cdx.BOMFileFormatJSON).Decode(&bom); err != nil {
-		return nil, fmt.Errorf("forgeseal exec adapter: parsing CycloneDX output: %w", err)
+		return nil, codes.E(codes.SBOMForgesealOutputInvalid,
+			"forgeseal exec adapter: parsing CycloneDX output: %v", err)
+	}
+	// A syntactically valid but semantically empty document (for example a
+	// bare {}) decodes with no error, and its zero SpecVersion would render
+	// as "SpecVersion(0)" inside the SBOMFormat string of a signed manifest.
+	// Both identity fields must therefore be present and correct before any
+	// digesting happens.
+	if bom.BOMFormat != cdx.BOMFormat {
+		return nil, codes.E(codes.SBOMForgesealOutputInvalid,
+			"forgeseal exec adapter: sbom output bomFormat is %q, want %q", bom.BOMFormat, cdx.BOMFormat)
+	}
+	if bom.SpecVersion == 0 {
+		return nil, codes.E(codes.SBOMForgesealOutputInvalid,
+			"forgeseal exec adapter: sbom output is missing specVersion")
 	}
 
 	sum := sha256.Sum256(raw)

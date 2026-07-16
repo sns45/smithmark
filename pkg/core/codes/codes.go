@@ -196,6 +196,11 @@ const (
 	// its reported version string could not be parsed as semver at all;
 	// "dev" (a maintainer's own local build) is always accepted.
 	SBOMForgesealVersionUnsupported = "SBOM_FORGESEAL_VERSION_UNSUPPORTED"
+	// SBOMForgesealOutputInvalid reports that the forgeseal sbom output was
+	// not a valid CycloneDX document: it failed strict parsing, or it
+	// decoded but lacked the CycloneDX bomFormat marker or a specVersion.
+	// A semantically empty document must never reach a signed manifest.
+	SBOMForgesealOutputInvalid = "SBOM_FORGESEAL_OUTPUT_INVALID"
 	// RefUnmappable reports that an artifact name could not be mapped to a
 	// valid OCI repository path segment.
 	RefUnmappable = "REF_UNMAPPABLE"
@@ -258,6 +263,7 @@ func All() []string {
 		ToolListingMismatch,
 		SBOMForgesealMissing,
 		SBOMForgesealVersionUnsupported,
+		SBOMForgesealOutputInvalid,
 		RefUnmappable,
 		AttestationBaseUnknown,
 		ToolExtractionFailed,

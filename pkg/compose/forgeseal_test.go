@@ -30,6 +30,13 @@ const pinnedHappyPathDigest = "1c5058ef04d8ec5c4a798c9d7919a315b0ebb6c4624589c0c
 // silently passes bad output through to a digest.
 const malformedBOM = `this is not json at all`
 
+// emptyBOM is syntactically valid JSON that decodes into cdx.BOM with no
+// error while carrying neither a bomFormat marker nor a specVersion. Before
+// the structural check landed, Generate accepted this and produced the
+// nonsense SBOMFormat "application/vnd.cyclonedx+json;version=SpecVersion(0)",
+// which a signed manifest would then have carried forever.
+const emptyBOM = `{}`
+
 // installFakeForgeseal writes a fake forgeseal executable into a fresh
 // t.TempDir() and prepends that directory to PATH via t.Setenv, so
 // exec.LookPath("forgeseal") finds it for the duration of the test (Task
@@ -160,9 +167,22 @@ func TestGenerateRejectsUnparseableVersion(t *testing.T) {
 func TestGenerateRejectsMalformedBOM(t *testing.T) {
 	installFakeForgeseal(t, "forgeseal v0.3.0\n  commit: abc1234\n  built: 2024-01-01T00:00:00Z\n", malformedBOM)
 
-	result, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
-	if err == nil {
-		t.Fatalf("Generate succeeded on a malformed BOM; want a strict parse failure, got %+v", result)
+	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
+	wantCodedError(t, err, codes.SBOMForgesealOutputInvalid)
+}
+
+// TestGenerateRejectsEmptyBOMDocument proves a syntactically valid but
+// semantically empty document never reaches the digest step: {} decodes with
+// no error, so only the post decode structural check can catch it. The happy
+// path counterpart, a valid BOM whose specVersion is present pinning the
+// exact SBOMFormat string, is TestGenerateHappyPath above.
+func TestGenerateRejectsEmptyBOMDocument(t *testing.T) {
+	installFakeForgeseal(t, "forgeseal v0.3.0\n  commit: abc1234\n  built: 2024-01-01T00:00:00Z\n", emptyBOM)
+
+	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
+	wantCodedError(t, err, codes.SBOMForgesealOutputInvalid)
+	if !strings.Contains(err.Error(), "bomFormat") {
+		t.Errorf("err = %v, want a detail naming the missing bomFormat field", err)
 	}
 }
 
@@ -182,6 +202,7 @@ func TestParseSemver(t *testing.T) {
 		{"v1.2.3", 1, 2, 3, true},
 		{"0.1.0", 0, 1, 0, true},
 		{"v0.1.0", 0, 1, 0, true},
+		{"v0.10.0", 0, 10, 0, true}, // two digit field parses as the number ten
 		{"1.2", 0, 0, 0, false},
 		{"1.2.3.4", 0, 0, 0, false},
 		{"1.2.x", 0, 0, 0, false},
@@ -214,6 +235,7 @@ func TestCheckForgesealVersion(t *testing.T) {
 		{"v0.1.0", ""}, // exactly the minimum: accepted
 		{"0.1.0", ""},  // no v prefix also accepted
 		{"v1.0.0", ""},
+		{"v0.10.0", ""}, // two digit minor: numeric comparison accepts it
 		{"v0.0.9", codes.SBOMForgesealVersionUnsupported},
 		{"v0.1.0-beta", codes.SBOMForgesealVersionUnsupported},
 		{"garbage", codes.SBOMForgesealVersionUnsupported},
@@ -227,6 +249,21 @@ func TestCheckForgesealVersion(t *testing.T) {
 			continue
 		}
 		wantCodedError(t, err, tt.wantCode)
+	}
+}
+
+// TestSemverLess pins the two digit boundary the version gate must get
+// right: 0.9.0 sorts before 0.10.0 numerically, while a lexicographic
+// string comparison would wrongly order "0.10.0" before "0.9.0".
+func TestSemverLess(t *testing.T) {
+	if !semverLess(0, 9, 0, 0, 10, 0) {
+		t.Error("semverLess(0.9.0, 0.10.0) = false, want true (numeric, not lexicographic)")
+	}
+	if semverLess(0, 10, 0, 0, 9, 0) {
+		t.Error("semverLess(0.10.0, 0.9.0) = true, want false (numeric, not lexicographic)")
+	}
+	if semverLess(0, 1, 0, 0, 1, 0) {
+		t.Error("semverLess(0.1.0, 0.1.0) = true, want false (equal is not less)")
 	}
 }
 
