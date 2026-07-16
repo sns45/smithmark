@@ -76,6 +76,82 @@ const (
 	BundleSymlinkRejected = "BUNDLE_SYMLINK_REJECTED"
 )
 
+// Verification check codes (spec 3, decision D4). Phase 3 (M3) is the first
+// consumer of these; they are defined here now so the registry stays
+// complete ahead of that work.
+const (
+	// SignatureValid reports that the DSSE envelope signature verified
+	// successfully.
+	SignatureValid = "SIGNATURE_VALID"
+	// RekorInclusionValid reports that the signature's Rekor transparency
+	// log inclusion proof verified successfully.
+	RekorInclusionValid = "REKOR_INCLUSION_VALID"
+	// SubjectDigestMatch reports that the attested subject digest matches
+	// the digest of the artifact being verified.
+	SubjectDigestMatch = "SUBJECT_DIGEST_MATCH"
+	// ManifestSchemaValid reports that the capability manifest carried by
+	// the attestation passed semantic validation.
+	ManifestSchemaValid = "MANIFEST_SCHEMA_VALID"
+	// ProvenancePresent reports that a provenance attestation was found
+	// alongside the artifact.
+	ProvenancePresent = "PROVENANCE_PRESENT"
+	// NPMProvenanceVerified reports that an npm package's own provenance
+	// attestation verified successfully.
+	NPMProvenanceVerified = "NPM_PROVENANCE_VERIFIED"
+	// AttestationMissing reports that no attestation bundle was found for
+	// the artifact, so verification fails outright.
+	AttestationMissing = "ATTESTATION_MISSING"
+	// DependencySBOMMissing reports, informationally, that the manifest
+	// carries no dependency SBOM reference.
+	DependencySBOMMissing = "DEPENDENCY_SBOM_MISSING"
+	// PredicateVersionUnsupported reports that the attestation statement's
+	// predicate version is not one this build understands.
+	PredicateVersionUnsupported = "PREDICATE_VERSION_UNSUPPORTED"
+	// HostedEndpointUnsupported reports, informationally, that a registry
+	// entry points only at a remote endpoint this build does not attest.
+	HostedEndpointUnsupported = "HOSTED_ENDPOINT_UNSUPPORTED"
+)
+
+// Lint finding codes (spec 3). Phase 4 (M4) is the first consumer of these;
+// they are defined here now so the registry stays complete ahead of that
+// work.
+const (
+	// UndeclaredNetworkEgress reports detected code performing network
+	// egress the manifest does not declare.
+	UndeclaredNetworkEgress = "UNDECLARED_NETWORK_EGRESS"
+	// UndeclaredFilesystem reports detected code accessing the filesystem
+	// in a way the manifest does not declare.
+	UndeclaredFilesystem = "UNDECLARED_FILESYSTEM"
+	// UndeclaredExec reports detected code executing a binary the manifest
+	// does not declare.
+	UndeclaredExec = "UNDECLARED_EXEC"
+	// UndeclaredEnv reports detected code reading an environment variable
+	// the manifest does not declare.
+	UndeclaredEnv = "UNDECLARED_ENV"
+	// ToolListingMismatch reports that the declared MCP tool listing
+	// disagrees with the tools extracted from the live server.
+	ToolListingMismatch = "TOOL_LISTING_MISMATCH"
+)
+
+// Operational codes (spec 2.2, decisions D2 and D3). SigningUnavailablePlatform
+// above predates this registry; the codes in this block are reserved for
+// Phase 2 (M2) and Phase 3 (M3) work that has not landed yet.
+const (
+	// SBOMForgesealMissing reports that the forgeseal binary required to
+	// generate a dependency SBOM could not be found.
+	SBOMForgesealMissing = "SBOM_FORGESEAL_MISSING"
+	// SBOMForgesealVersionUnsupported reports that the installed forgeseal
+	// binary is older than the minimum version this build requires.
+	SBOMForgesealVersionUnsupported = "SBOM_FORGESEAL_VERSION_UNSUPPORTED"
+	// RefUnmappable reports that an artifact name could not be mapped to a
+	// valid OCI repository path segment.
+	RefUnmappable = "REF_UNMAPPABLE"
+	// AttestationBaseUnknown reports that no attestation base registry
+	// could be resolved from the flag, environment variable, or package.json
+	// key.
+	AttestationBaseUnknown = "ATTESTATION_BASE_UNKNOWN"
+)
+
 // All returns every registered code.
 func All() []string {
 	return []string{
@@ -100,5 +176,24 @@ func All() []string {
 		BundleModeInvalid,
 		BundleDigestInvalid,
 		BundleSymlinkRejected,
+		SignatureValid,
+		RekorInclusionValid,
+		SubjectDigestMatch,
+		ManifestSchemaValid,
+		ProvenancePresent,
+		NPMProvenanceVerified,
+		AttestationMissing,
+		DependencySBOMMissing,
+		PredicateVersionUnsupported,
+		HostedEndpointUnsupported,
+		UndeclaredNetworkEgress,
+		UndeclaredFilesystem,
+		UndeclaredExec,
+		UndeclaredEnv,
+		ToolListingMismatch,
+		SBOMForgesealMissing,
+		SBOMForgesealVersionUnsupported,
+		RefUnmappable,
+		AttestationBaseUnknown,
 	}
 }
