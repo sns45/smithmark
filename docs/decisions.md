@@ -70,6 +70,10 @@ Binding rules:
 - Unknown fields are errors, everywhere, in both directions (generation and verification).
 - Subject naming: purl for npm (`pkg:npm/name@version`); skill name for skills.
 
+## D7: M0 whitespace verdict adopted; §1.2 narrowed to the composition claim
+
+**Decided 2026-07-16 at the M0 gate.** The sweep (`docs/research/whitespace-sweep.md`) falsified the original blanket "first" claim: Enclawed (arXiv 2605.00424, implemented) ships signed skill manifests with a capability vocabulary and policy gate; `studiomeyer-io/mcp-server-attestation` signs MCP tool and spawn allowlists; ETDI binds signed tool definitions to a policy check. The maintainer adopted the narrowed composition claim (both artifact kinds; portable in-toto DSSE composing npm provenance, Sigstore, SLSA, and CycloneDX; external publication to admission loop) and the companion neighbor naming text; `requirements.md` §1.2, §1.3, and the whitespace status block were updated in the same commit. Watch items: Enclawed's trajectory; Ken Huang's skill signing essay before M6. Development proceeds in a private GitHub repo (`sns45/smithmark`) with one PR per milestone; naming gates still apply before anything goes public.
+
 ## U1: Declared manifest source is `smithmark.yaml`
 
 Makers declare capabilities and surfaces in `smithmark.yaml` at the artifact root; strict parsed; schema mirrors the predicate's `capabilities` and surface blocks. `manifest init` scaffolds it. Rejected: `package.json` embedding (skills have no `package.json`); JSON only (hostile to hand authoring). The `package.json` `smithmark` key carries only `attestationBase` discovery metadata (D3), never capability declarations.
