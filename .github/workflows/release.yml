@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the GitHub release and upload its assets
+  packages: write # push the smithmark image to GHCR
+  # Keyless Sigstore readiness: this token is not consumed yet (no signing
+  # step runs in this workflow today), but the OIDC identity it grants is
+  # exactly what Phase 6's cosign/sigstore-go signing step will exchange for
+  # a short lived certificate, so the permission is requested here ahead of
+  # that work landing.
+  id-token: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: go test
+        run: go test ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GoReleaser builds the cross platform binaries, the nfpm packages, the
+      # Homebrew tap formula, the GHCR image, and the GitHub release itself.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # Phase 6 lands its steps here, after the GoReleaser release above and
+      # before the workflow ends: running forgeseal's own pipeline against
+      # the release artifacts to produce an SBOM, smithmark self attesting
+      # its own release binaries, and the assayward gate evaluating the
+      # result, mirroring the shape of forgeseal's release workflow and its
+      # separate assayward gate workflow. No signing steps run in this
+      # workflow yet; the id-token permission above is what those future
+      # steps will use for keyless Sigstore signing.
+      # ------------------------------------------------------------------

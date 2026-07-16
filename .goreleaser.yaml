@@ -1,0 +1,140 @@
+# Release engineering scaffold for smithmark (Task 2.9), mirroring the
+# family convention set by forgeseal but verified against current GoReleaser
+# v2 documentation rather than copied verbatim: notably this file uses the
+# dockers_v2 pipe (the classic dockers section was deprecated in GoReleaser
+# 2.12), the plural archives formats key introduced in GoReleaser 2.6, and
+# homebrew_casks rather than the now deprecated brews section.
+version: 2
+
+project_name: smithmark
+
+builds:
+  - id: smithmark
+    main: ./cmd/smithmark
+    binary: smithmark
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Reproducible builds: stamp the binary's embedded modification time from
+    # the commit rather than the build wall clock.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      # Only the version var is targeted here: cmd/smithmark/main.go (Task
+      # 2.8) declares a single package main var, version, defaulting to
+      # "dev" and printed by the version subcommand. It does not declare
+      # commit or date vars the way forgeseal's internal/cli package does,
+      # so there is nothing for ldflags to inject those into yet. See the
+      # Task 2.9 report for this noted as a follow up.
+      #
+      # The -X target is the literal package "main", not the module's full
+      # import path: unlike forgeseal, whose version var lives in an
+      # imported internal/cli package, smithmark declares version directly
+      # in package main, and the Go linker always renames a program's main
+      # package symbol prefix to "main" regardless of its filesystem import
+      # path. Verified locally: the full import path form links clean but
+      # silently leaves version at its "dev" default; main.version does not.
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+nfpms:
+  - id: smithmark
+    package_name: smithmark
+    file_name_template: "{{ .ConventionalFileName }}"
+    homepage: "https://github.com/sns45/smithmark"
+    maintainer: "Shantanu Sharma <notifyshantanu@gmail.com>"
+    description: "Provenance and capability attestation for the agent tool supply chain (MCP servers and skills)"
+    license: "Apache-2.0"
+    formats:
+      - deb
+      - rpm
+
+# homebrew_casks, not the classic brews section: GoReleaser deprecated brews
+# in favor of casks for prebuilt binary distribution (see
+# https://goreleaser.com/deprecations#brews), and goreleaser check treats
+# that deprecation as a failure. This is the one place this file departs
+# from forgeseal's own .goreleaser.yaml, which still uses brews; see the
+# Task 2.9 report for the sibling repos this leaves unmigrated.
+homebrew_casks:
+  - name: smithmark
+    repository:
+      owner: sns45
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: smithmark-bot
+      email: smithmark-bot@users.noreply.github.com
+    # The tap repo (sns45/homebrew-tap) keeps its existing formulas at the
+    # repository root (see forgeseal.rb, assayward.rb, and so on); casks
+    # default to a Casks subdirectory instead, which is left as is here
+    # rather than forced to match, since mixing formulas and casks in one
+    # tap is normal Homebrew practice.
+    skip_upload: "{{ .IsSnapshot }}"
+    homepage: "https://github.com/sns45/smithmark"
+    description: "Provenance and capability attestation for the agent tool supply chain (MCP servers and skills)"
+    # The release binary is not code signed or notarized yet, so Homebrew
+    # would otherwise leave it quarantined; this hook clears that bit the
+    # way GoReleaser's own cask documentation recommends for unsigned
+    # binaries.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/smithmark"]
+          end
+
+# dockers_v2 is the current, non deprecated Docker pipe (the classic dockers
+# section plus docker_manifests was deprecated in GoReleaser 2.12 in favor of
+# a single docker buildx build invocation). sbom and provenance are disabled
+# so a single platform build stays a plain image rather than a manifest list,
+# per the GoReleaser single arch cookbook.
+dockers_v2:
+  - ids:
+      - smithmark
+    images:
+      - ghcr.io/sns45/smithmark
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .IsSnapshot }}latest{{ end }}"
+    dockerfile: Dockerfile
+    platforms:
+      - linux/amd64
+    sbom: false
+    flags:
+      - "--provenance=false"
+    # Snapshot builds never publish anything (image included): this is an
+    # explicit belt and suspenders gate on top of GoReleaser's own snapshot
+    # behavior, which already implies --skip=announce,publish,validate.
+    disable: "{{ .IsSnapshot }}"
+    labels:
+      "org.opencontainers.image.title": "{{ .ProjectName }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.source": "https://github.com/sns45/smithmark"
+      "org.opencontainers.image.licenses": "Apache-2.0"
