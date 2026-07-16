@@ -76,9 +76,11 @@ const (
 	BundleSymlinkRejected = "BUNDLE_SYMLINK_REJECTED"
 )
 
-// Verification check codes (spec 3, decision D4). Phase 3 (M3) is the first
-// consumer of these; they are defined here now so the registry stays
-// complete ahead of that work.
+// Verification check codes (spec 3; decisions D2, D4, D5; open item U3).
+// AttestationMissing traces to U3, DependencySBOMMissing to D2, and
+// HostedEndpointUnsupported to D5; D4 fixes the exit code contract the
+// checks feed. Phase 3 (M3) is the first consumer of these; they are
+// defined here now so the registry stays complete ahead of that work.
 const (
 	// SignatureValid reports that the DSSE envelope signature verified
 	// successfully.

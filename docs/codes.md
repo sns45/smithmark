@@ -1,4 +1,4 @@
-# smithmark — Machine Readable Codes
+# smithmark: Machine Readable Codes
 
 Every check, finding, and operational condition smithmark reports carries a stable, machine readable code. Codes are API: once documented here, a code is never renamed, never repurposed for a different meaning, and never removed, even if it becomes unreachable. New codes are added by appending a row to this table and a constant to `pkg/core/codes`; `pkg/core/codes.All()` and this table are kept in sync by `TestEveryCodeIsDocumented`.
 

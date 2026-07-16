@@ -1,4 +1,4 @@
-# smithmark — Decisions (ADR lite)
+# smithmark: Decisions (ADR lite)
 
 Each entry records a decision resolved during the build. D1 to D6 resolve spec §13 Q1 to Q6; D7 records the M0 gate outcome; U entries cover items the spec left open. All spec references are to `requirements.md` in the repo root. All decisions below were approved by the maintainer on 2026-07-16.
 
