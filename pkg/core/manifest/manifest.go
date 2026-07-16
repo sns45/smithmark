@@ -9,9 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
+
+	"github.com/sns45/smithmark/pkg/core/codes"
 )
 
 // ArtifactKind identifies the kind of artifact a manifest describes.
@@ -170,4 +176,277 @@ func (m *CapabilityManifest) Canonical() ([]byte, error) {
 		return nil, err
 	}
 	return jsoncanonicalizer.Transform(raw)
+}
+
+// Issue is one semantic validation failure, identified by a stable machine
+// readable code (spec 3; codes are documented in pkg/core/codes).
+type Issue struct {
+	Code   string `json:"code"` // stable, from pkg/core/codes
+	Path   string `json:"path"` // JSON pointerish location, e.g. capabilities.networkEgress[0].host
+	Detail string `json:"detail"`
+}
+
+const schemaVersion1 = "1.0.0"
+
+// Validate checks a parsed manifest against the semantic rules of spec 3 and
+// decision D1, beyond what strict JSON parsing already enforces. The result
+// is sorted by (Code, Path) for determinism; a nil slice means the manifest
+// is valid.
+func (m *CapabilityManifest) Validate() []Issue {
+	var issues []Issue
+	add := func(code, path, detail string) {
+		issues = append(issues, Issue{Code: code, Path: path, Detail: detail})
+	}
+
+	if m.SchemaVersion != schemaVersion1 {
+		add(codes.ManifestSchemaVersionUnsupported, "schemaVersion",
+			fmt.Sprintf("schemaVersion must be %q, got %q", schemaVersion1, m.SchemaVersion))
+	}
+
+	switch m.Artifact.Kind {
+	case KindMCPServer:
+		if m.MCP == nil {
+			add(codes.ManifestKindSurfaceMismatch, "mcp", "kind mcp-server requires mcp to be set")
+		}
+		if m.Skill != nil {
+			add(codes.ManifestKindSurfaceMismatch, "skill", "kind mcp-server requires skill to be nil")
+		}
+	case KindSkill:
+		if m.Skill == nil {
+			add(codes.ManifestKindSurfaceMismatch, "skill", "kind skill requires skill to be set")
+		}
+		if m.MCP != nil {
+			add(codes.ManifestKindSurfaceMismatch, "mcp", "kind skill requires mcp to be nil")
+		}
+	default:
+		add(codes.ManifestEnumInvalid, "artifact.kind", fmt.Sprintf("unknown artifact kind %q", m.Artifact.Kind))
+	}
+
+	switch m.Artifact.Source {
+	case SourceNPM, SourceOCI, SourcePyPI, SourceLocal, SourceMCPRegistry:
+	default:
+		add(codes.ManifestEnumInvalid, "artifact.source", fmt.Sprintf("unknown source kind %q", m.Artifact.Source))
+	}
+
+	// U4: version is required unless the artifact is a skill.
+	if m.Artifact.Kind != KindSkill && m.Artifact.Version == "" {
+		add(codes.ManifestVersionRequired, "artifact.version", "version is required unless kind is skill")
+	}
+
+	if m.Capabilities.NetworkEgress == nil {
+		add(codes.ManifestCapabilitiesKeyMissing, "capabilities.networkEgress", "capabilities.networkEgress key is absent; declare it as an empty array if none apply")
+	}
+	if m.Capabilities.Filesystem == nil {
+		add(codes.ManifestCapabilitiesKeyMissing, "capabilities.filesystem", "capabilities.filesystem key is absent; declare it as an empty array if none apply")
+	}
+	if m.Capabilities.Exec == nil {
+		add(codes.ManifestCapabilitiesKeyMissing, "capabilities.exec", "capabilities.exec key is absent; declare it as an empty array if none apply")
+	}
+	if m.Capabilities.Env == nil {
+		add(codes.ManifestCapabilitiesKeyMissing, "capabilities.env", "capabilities.env key is absent; declare it as an empty array if none apply")
+	}
+	if m.Capabilities.Secrets == nil {
+		add(codes.ManifestCapabilitiesKeyMissing, "capabilities.secrets", "capabilities.secrets key is absent; declare it as an empty array if none apply")
+	}
+
+	for i, r := range m.Capabilities.NetworkEgress {
+		if !validHost(r.Host) {
+			add(codes.EgressHostInvalid, fmt.Sprintf("capabilities.networkEgress[%d].host", i),
+				fmt.Sprintf("host %q does not match the egress host grammar (D1)", r.Host))
+		}
+		for j, p := range r.Ports {
+			if p < 1 || p > 65535 {
+				add(codes.EgressPortInvalid, fmt.Sprintf("capabilities.networkEgress[%d].ports[%d]", i, j),
+					fmt.Sprintf("port %d is out of range 1 to 65535", p))
+			}
+		}
+	}
+
+	for i, r := range m.Capabilities.Filesystem {
+		switch r.Access {
+		case "read", "write", "readwrite":
+		default:
+			add(codes.FSAccessInvalid, fmt.Sprintf("capabilities.filesystem[%d].access", i),
+				fmt.Sprintf("access %q must be read, write, or readwrite", r.Access))
+		}
+		if !validFSPath(r.Path) {
+			add(codes.FSPathInvalid, fmt.Sprintf("capabilities.filesystem[%d].path", i),
+				fmt.Sprintf("path %q does not match the filesystem path grammar (D1)", r.Path))
+		}
+	}
+
+	for i, e := range m.Capabilities.Env {
+		if !validEnvName(e) {
+			add(codes.EnvNameInvalid, fmt.Sprintf("capabilities.env[%d]", i),
+				fmt.Sprintf("env entry %q does not match the env name grammar (D1)", e))
+		}
+	}
+
+	for i, s := range m.Capabilities.Secrets {
+		if !validSecret(s) {
+			add(codes.SecretFormatInvalid, fmt.Sprintf("capabilities.secrets[%d]", i),
+				fmt.Sprintf("secret %q is not a kind:provider pair (D1)", s))
+		}
+	}
+
+	if m.MCP != nil {
+		for i, tr := range m.MCP.Transports {
+			switch tr {
+			case "stdio", "http", "sse":
+			default:
+				add(codes.TransportInvalid, fmt.Sprintf("mcp.transports[%d]", i),
+					fmt.Sprintf("transport %q must be stdio, http, or sse", tr))
+			}
+		}
+		for i, tool := range m.MCP.Tools {
+			if !validDigestSet(tool.InputSchemaDigest) {
+				add(codes.DigestInvalid, fmt.Sprintf("mcp.tools[%d].inputSchemaDigest", i),
+					"digest set must be non empty with non empty keys and lowercase hex values of even length")
+			}
+		}
+	}
+
+	if m.Skill != nil {
+		if !validDigestSet(m.Skill.EntryDigest) {
+			add(codes.DigestInvalid, "skill.entryDigest",
+				"digest set must be non empty with non empty keys and lowercase hex values of even length")
+		}
+		for i, f := range m.Skill.Scripts {
+			switch f.Mode {
+			case "regular", "executable":
+			default:
+				add(codes.ModeInvalid, fmt.Sprintf("skill.scripts[%d].mode", i),
+					fmt.Sprintf("mode %q must be regular or executable", f.Mode))
+			}
+			if !validDigestSet(f.Digest) {
+				add(codes.DigestInvalid, fmt.Sprintf("skill.scripts[%d].digest", i),
+					"digest set must be non empty with non empty keys and lowercase hex values of even length")
+			}
+		}
+	}
+
+	if m.Dependencies != nil {
+		if !validDigestSet(m.Dependencies.SBOMDigest) {
+			add(codes.DigestInvalid, "dependencies.sbomDigest",
+				"digest set must be non empty with non empty keys and lowercase hex values of even length")
+		}
+	}
+
+	sort.Slice(issues, func(i, j int) bool {
+		if issues[i].Code != issues[j].Code {
+			return issues[i].Code < issues[j].Code
+		}
+		return issues[i].Path < issues[j].Path
+	})
+	return issues
+}
+
+// domainLabel matches one DNS label: lowercase alphanumeric, with interior
+// hyphens allowed but not as the first or last character.
+var domainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// validHost reports whether host matches the D1 egress host grammar: an
+// exact DNS name, an IP literal, a single leftmost wildcard label
+// (`*.example.com`), or the bare escape hatch `*`.
+func validHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+	labels := strings.Split(host, ".")
+	for i, label := range labels {
+		if i == 0 && label == "*" {
+			continue
+		}
+		if !domainLabel.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// fsPathTokens are the portability tokens a filesystem path may start with,
+// in place of an absolute path (D1).
+var fsPathTokens = []string{"${home}", "${tmp}", "${cwd}"}
+
+// validFSPath reports whether path matches the D1 filesystem path grammar:
+// it starts with a portability token followed by "/" (or is exactly the
+// token), or it is relative (no leading "/", no drive letter); bare "*" or
+// "**" are accepted as the escape hatch. A token immediately followed by any
+// character other than "/" is malformed, for example "${home}x".
+func validFSPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	if path == "*" || path == "**" {
+		return true
+	}
+	for _, tok := range fsPathTokens {
+		if !strings.HasPrefix(path, tok) {
+			continue
+		}
+		rest := path[len(tok):]
+		return rest == "" || strings.HasPrefix(rest, "/")
+	}
+	if strings.HasPrefix(path, "/") {
+		return false
+	}
+	if hasDriveLetter(path) {
+		return false
+	}
+	return true
+}
+
+// hasDriveLetter reports whether path starts with a Windows style drive
+// letter such as "C:".
+func hasDriveLetter(path string) bool {
+	if len(path) < 2 || path[1] != ':' {
+		return false
+	}
+	c := path[0]
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+// envName matches an env entry: [A-Z_][A-Z0-9_]* with an optional single
+// trailing "*" prefix marker (D1).
+var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*\*?$`)
+
+// validEnvName reports whether name matches the D1 env name grammar.
+func validEnvName(name string) bool {
+	return envName.MatchString(name)
+}
+
+// secretPart matches one side of a secret's kind:provider pair (D1).
+var secretPart = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// validSecret reports whether s is a kind:provider pair matching the D1
+// grammar on each side.
+func validSecret(s string) bool {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	return secretPart.MatchString(parts[0]) && secretPart.MatchString(parts[1])
+}
+
+// hexDigest matches a lowercase hex string.
+var hexDigest = regexp.MustCompile(`^[0-9a-f]+$`)
+
+// validDigestSet reports whether d is non empty, has no empty keys, and has
+// only lowercase hex values of even length.
+func validDigestSet(d DigestSet) bool {
+	if len(d) == 0 {
+		return false
+	}
+	for k, v := range d {
+		if k == "" {
+			return false
+		}
+		if len(v)%2 != 0 || !hexDigest.MatchString(v) {
+			return false
+		}
+	}
+	return true
 }
