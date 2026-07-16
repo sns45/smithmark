@@ -43,11 +43,20 @@ type yamlDecl struct {
 	Capabilities *yamlCapabilities `yaml:"capabilities"`
 }
 
-// yamlMCPSurface carries only transports: tools, resources, and prompts are
-// extracted from the running server by attest (U2), never declared, so those
-// keys are unknown fields here by construction.
+// yamlMCPSurface carries the declared transports and, optionally, the launch
+// command attest uses to extract the tool listing. Tools, resources, and
+// prompts are extracted from the running server by attest (U2), never
+// declared, so those keys stay unknown fields here by construction. command is
+// the maker's authoritative statement of how to start the stdio server for
+// extraction (controller resolution 3, Task 2.8); it lives inside this struct
+// rather than as a top level field so it is valid only where an mcp block is
+// valid at all. A skill declaration cannot reach it: a skill may not carry an
+// mcp block, so a command smuggled onto a skill trips the same kind versus
+// surface mismatch a stray mcp block already does, and a command placed
+// anywhere else is an unknown field.
 type yamlMCPSurface struct {
 	Transports []string `yaml:"transports"`
+	Command    []string `yaml:"command"`
 }
 
 // yamlSkillSurface carries invokesTools and the optional executables list.
@@ -103,6 +112,12 @@ type yamlExecRule struct {
 type Declaration struct {
 	Manifest    *manifest.CapabilityManifest
 	Executables []string // skill only; nil otherwise
+	// Command is the optional launch command an mcp-server declaration carries
+	// under its mcp block, for attest to extract the tool listing from the
+	// running server (U2). It is nil for a skill declaration and nil for an
+	// mcp-server declaration that omits the optional command key; it is a non
+	// nil slice only when the key was present.
+	Command []string
 }
 
 // LoadDeclared reads and strictly parses a smithmark.yaml declaration (U1)
@@ -235,14 +250,16 @@ func LoadDeclared(path string) (*Declaration, error) {
 		},
 	}
 	var executables []string
+	var command []string
 	switch kind {
 	case manifest.KindMCPServer:
 		m.MCP = &manifest.MCPSurface{Transports: d.MCP.Transports}
+		command = d.MCP.Command
 	case manifest.KindSkill:
 		m.Skill = &manifest.SkillSurface{InvokesTools: d.Skill.InvokesTools}
 		executables = d.Skill.Executables
 	}
-	return &Declaration{Manifest: m, Executables: executables}, nil
+	return &Declaration{Manifest: m, Executables: executables, Command: command}, nil
 }
 
 // SkillInfo carries the frontmatter identity read from a skill's SKILL.md:

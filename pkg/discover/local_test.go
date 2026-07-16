@@ -333,6 +333,64 @@ func TestLoadDeclaredExecutablesRejectedOnMCPKind(t *testing.T) {
 	}
 }
 
+// TestLoadDeclaredMCPCommand pins the optional launch command an mcp-server
+// declaration may carry under its mcp block. attest hands this to ExtractTools
+// when no --tools-from escape hatch is supplied (controller resolution 3), so
+// it must survive strict parsing and travel out on Declaration.Command.
+func TestLoadDeclaredMCPCommand(t *testing.T) {
+	doc := replace(t, validMCPDecl, "  transports: [stdio]",
+		"  transports: [stdio]\n  command: [npx, fake-caller, --stdio]")
+	decl, err := discover.LoadDeclared(writeDecl(t, doc))
+	if err != nil {
+		t.Fatalf("LoadDeclared: %v", err)
+	}
+	want := []string{"npx", "fake-caller", "--stdio"}
+	if !reflect.DeepEqual(decl.Command, want) {
+		t.Errorf("Command = %v, want %v", decl.Command, want)
+	}
+}
+
+// TestLoadDeclaredCommandAbsent pins that Command is nil when no command key
+// is declared, for both an mcp-server without the key and a skill declaration
+// (where the mcp block that would hold a command is forbidden outright).
+func TestLoadDeclaredCommandAbsent(t *testing.T) {
+	mcp, err := discover.LoadDeclared(writeDecl(t, validMCPDecl))
+	if err != nil {
+		t.Fatalf("LoadDeclared mcp: %v", err)
+	}
+	if mcp.Command != nil {
+		t.Errorf("Command = %v, want nil when the mcp block omits command", mcp.Command)
+	}
+	skill, err := discover.LoadDeclared(writeDecl(t, validSkillDecl))
+	if err != nil {
+		t.Fatalf("LoadDeclared skill: %v", err)
+	}
+	if skill.Command != nil {
+		t.Errorf("Command = %v, want nil for a skill declaration", skill.Command)
+	}
+}
+
+// TestLoadDeclaredCommandRejectedForSkill pins that command stays an mcp only
+// key: a skill cannot smuggle one in. Inside an mcp block it trips the kind
+// versus surface mismatch (a skill may not declare mcp at all); at the top
+// level or inside the skill block it is an unknown field. Either way the
+// declaration is rejected, never silently accepted.
+func TestLoadDeclaredCommandRejectedForSkill(t *testing.T) {
+	cases := map[string]string{
+		"inside an mcp block": validSkillDecl + "mcp:\n  transports: [stdio]\n  command: [npx, x]\n",
+		"at the top level":    "command: [npx, x]\n" + validSkillDecl,
+		"inside the skill block": replace(t, validSkillDecl, "  invokesTools: []",
+			"  invokesTools: []\n  command: [npx, x]"),
+	}
+	for name, doc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := discover.LoadDeclared(writeDecl(t, doc)); err == nil {
+				t.Fatalf("declaration with a command key %s was accepted; it must be rejected", name)
+			}
+		})
+	}
+}
+
 // skillFixturePath points at the committed repo root fixture skill, used to
 // pin the canonical bundle digest end to end through the walker.
 const skillFixturePath = "../../testdata/skills/hello-skill"

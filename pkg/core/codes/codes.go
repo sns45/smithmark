@@ -230,6 +230,17 @@ const (
 	// supplies some other tag by hand, and it is checked before any push is
 	// attempted.
 	PublishTagInvalid = "PUBLISH_TAG_INVALID"
+	// AttestSubjectUnresolved reports that attest could not resolve exactly one
+	// subject artifact to attest. For an mcp-server it means no --tarball was
+	// supplied and the artifact root held zero, or more than one, *.tgz tarball
+	// to digest, so the subject is ambiguous and attest fails closed rather
+	// than guessing which one to attest.
+	AttestSubjectUnresolved = "ATTEST_SUBJECT_UNRESOLVED"
+	// InternalError reports that an error carrying no registry code reached the
+	// command boundary. The CLI maps every failure to a single machine readable
+	// stderr line (decision D4); an error the pure core did not tag with a code
+	// is surfaced under this operational code rather than an empty one.
+	InternalError = "INTERNAL_ERROR"
 )
 
 // All returns every registered code.
@@ -287,5 +298,7 @@ func All() []string {
 		SigningConfigInvalid,
 		PublishBundleInvalid,
 		PublishTagInvalid,
+		AttestSubjectUnresolved,
+		InternalError,
 	}
 }
