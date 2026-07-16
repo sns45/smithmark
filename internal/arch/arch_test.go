@@ -3,14 +3,17 @@ package arch_test
 import (
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 // Spec §2.1: pkg/core is pure. Direct imports of any pkg/core package must
 // never include I/O packages. This test is the enforcement mechanism the
-// spec calls the lint/test guard.
-var forbidden = []string{"os", "os/exec", "io/fs", "path/filepath", "syscall", "net"}
+// spec calls the lint/test guard. "os/exec" is covered by the "os" prefix
+// rule, so it is not listed separately.
+var forbidden = []string{"os", "io/fs", "path/filepath", "syscall", "net"}
 
 type pkgInfo struct {
 	ImportPath string
@@ -19,13 +22,14 @@ type pkgInfo struct {
 	Dir        string
 }
 
+// repoRoot resolves the module root from this test file's own path, the same
+// runtime.Caller technique codes_test.go uses, so the two guards share one
+// approach and neither shells out to git. This file lives at
+// internal/arch/arch_test.go, so the root is two directories up.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("finding repo root: %v", err)
-	}
-	return strings.TrimSpace(string(out))
+	_, self, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(self), "..", "..")
 }
 
 func corePackages(t *testing.T) []pkgInfo {
@@ -59,8 +63,7 @@ func TestCoreImportsArePure(t *testing.T) {
 				continue
 			}
 			for _, f := range forbidden {
-				if imp == f || strings.HasPrefix(imp, f+"/") ||
-					(f == "net" && strings.HasPrefix(imp, "net")) {
+				if imp == f || strings.HasPrefix(imp, f+"/") {
 					t.Errorf("%s imports %s; pkg/core must stay pure (spec 2.1)", p.ImportPath, imp)
 				}
 			}

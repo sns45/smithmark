@@ -58,6 +58,8 @@ func TestDigestRejectsBadInput(t *testing.T) {
 		{"backslash path", []File{{Path: `scripts\x.py`, Mode: ModeRegular, SHA256: h}}},
 		{"absolute path", []File{{Path: "/etc/x", Mode: ModeRegular, SHA256: h}}},
 		{"dotdot segment", []File{{Path: "a/../b", Mode: ModeRegular, SHA256: h}}},
+		{"dot segment", []File{{Path: "a/./b", Mode: ModeRegular, SHA256: h}}},
+		{"double slash", []File{{Path: "a//b", Mode: ModeRegular, SHA256: h}}},
 		{"duplicate path", []File{{Path: "a", Mode: ModeRegular, SHA256: h}, {Path: "a", Mode: ModeExecutable, SHA256: h}}},
 		{"bad mode", []File{{Path: "a", Mode: "setuid", SHA256: h}}},
 		{"short hash", []File{{Path: "a", Mode: ModeRegular, SHA256: "abcd"}}},

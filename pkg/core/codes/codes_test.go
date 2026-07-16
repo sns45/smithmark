@@ -1,6 +1,8 @@
 package codes
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -61,6 +63,24 @@ func TestEveryDocumentedCodeExists(t *testing.T) {
 // screamingSnake rejects leading, trailing, or doubled underscores in
 // addition to constraining the character set.
 var screamingSnake = regexp.MustCompile(`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$`)
+
+// TestErrorAsExtractsCode proves a coded error survives wrapping: errors.As
+// pulls the *Error back out of a wrapped chain, and its Code is intact. This
+// is the machine readable path callers use instead of substring matching.
+func TestErrorAsExtractsCode(t *testing.T) {
+	inner := E(ManifestSchemaVersionUnsupported, "at %s", "schemaVersion")
+	if got, want := inner.Error(), "MANIFEST_SCHEMA_VERSION_UNSUPPORTED: at schemaVersion"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	wrapped := fmt.Errorf("outer context: %w", inner)
+	var e *Error
+	if !errors.As(wrapped, &e) {
+		t.Fatalf("errors.As did not find *Error in %v", wrapped)
+	}
+	if e.Code != ManifestSchemaVersionUnsupported {
+		t.Errorf("extracted code = %q, want %q", e.Code, ManifestSchemaVersionUnsupported)
+	}
+}
 
 func TestCodesAreUniqueAndShaped(t *testing.T) {
 	seen := map[string]bool{}

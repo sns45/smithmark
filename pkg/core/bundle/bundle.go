@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -55,7 +54,7 @@ const sha256HexLen = sha256.Size * 2
 // systems and across runs.
 func Digest(files []File) (string, error) {
 	if len(files) == 0 {
-		return "", fmt.Errorf("%s: bundle has no files to digest", codes.BundleEmpty)
+		return "", codes.E(codes.BundleEmpty, "bundle has no files to digest")
 	}
 
 	sorted := make([]File, len(files))
@@ -73,17 +72,17 @@ func Digest(files []File) (string, error) {
 
 	for i := 1; i < len(sorted); i++ {
 		if sorted[i].Path == sorted[i-1].Path {
-			return "", fmt.Errorf("%s: duplicate path %q", codes.BundleDuplicatePath, sorted[i].Path)
+			return "", codes.E(codes.BundleDuplicatePath, "duplicate path %q", sorted[i].Path)
 		}
 	}
 
 	raw, err := json.Marshal(sorted)
 	if err != nil {
-		return "", fmt.Errorf("%s: marshaling bundle: %w", codes.BundleDigestInvalid, err)
+		return "", codes.E(codes.BundleDigestInvalid, "marshaling bundle: %v", err)
 	}
 	canonical, err := jsoncanonicalizer.Transform(raw)
 	if err != nil {
-		return "", fmt.Errorf("%s: canonicalizing bundle: %w", codes.BundleDigestInvalid, err)
+		return "", codes.E(codes.BundleDigestInvalid, "canonicalizing bundle: %v", err)
 	}
 
 	sum := sha256.Sum256(canonical)
@@ -94,25 +93,26 @@ func Digest(files []File) (string, error) {
 // relative path with forward slashes, a known mode, and a well formed
 // sha256.
 func validateFile(f File) error {
-	if !validPath(f.Path) {
-		return fmt.Errorf("%s: invalid path %q", codes.BundlePathInvalid, f.Path)
+	if !ValidPath(f.Path) {
+		return codes.E(codes.BundlePathInvalid, "invalid path %q", f.Path)
 	}
 	switch f.Mode {
 	case ModeRegular, ModeExecutable:
 	default:
-		return fmt.Errorf("%s: invalid mode %q for path %q", codes.BundleModeInvalid, f.Mode, f.Path)
+		return codes.E(codes.BundleModeInvalid, "invalid mode %q for path %q", f.Mode, f.Path)
 	}
 	if !validSHA256(f.SHA256) {
-		return fmt.Errorf("%s: invalid sha256 %q for path %q", codes.BundleDigestInvalid, f.SHA256, f.Path)
+		return codes.E(codes.BundleDigestInvalid, "invalid sha256 %q for path %q", f.SHA256, f.Path)
 	}
 	return nil
 }
 
-// validPath reports whether path is a clean, relative path using forward
+// ValidPath reports whether path is a clean, relative path using forward
 // slashes only: not empty, no backslash, not absolute, and with no "." or
 // ".." segment. This is string only validation; pkg/core never imports
-// path/filepath, so it never resolves paths against a filesystem.
-func validPath(path string) bool {
+// path/filepath, so it never resolves paths against a filesystem. The
+// manifest package reuses it to validate declared skill script paths.
+func ValidPath(path string) bool {
 	if path == "" {
 		return false
 	}

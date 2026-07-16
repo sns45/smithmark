@@ -1,14 +1,38 @@
 // Package codes holds the stable identifiers smithmark attaches to
-// diagnostics, errors, and reports. Task 1.5 completes the registry; this
-// file stays deliberately minimal until then.
+// diagnostics, errors, and reports. This file is the complete code registry:
+// every constant here has a matching row in docs/codes.md, and later phases
+// extend the registry by appending new constants and rows rather than starting
+// a fresh list. The tests in this package keep the two in sync in both
+// directions.
 package codes
+
+import "fmt"
+
+// Error is a coded error: a stable, machine readable Code paired with a human
+// readable Detail. Every documented failure the pure core returns is an
+// *Error, so callers extract the Code with errors.As instead of matching on
+// message text.
+type Error struct {
+	Code   string
+	Detail string
+}
+
+// Error renders the coded error as "CODE: detail", the same prefix the core
+// used before typed errors, so existing substring checks keep working.
+func (e *Error) Error() string {
+	return e.Code + ": " + e.Detail
+}
+
+// E builds a coded error, formatting Detail with fmt.Sprintf.
+func E(code, format string, args ...any) *Error {
+	return &Error{Code: code, Detail: fmt.Sprintf(format, args...)}
+}
 
 // SigningUnavailablePlatform reports that signing could not proceed because
 // the current platform lacks a required signing capability.
 const SigningUnavailablePlatform = "SIGNING_UNAVAILABLE_PLATFORM"
 
-// Manifest semantic validation codes (spec 3, decision D1). Task 1.3 defines
-// these ahead of the full registry in Task 1.5.
+// Manifest semantic validation codes (spec 3, decision D1).
 const (
 	// ManifestSchemaVersionUnsupported reports a schemaVersion other than the
 	// one this build understands.
@@ -56,10 +80,30 @@ const (
 	// version, or source. Kind disagreements keep using
 	// ManifestKindSurfaceMismatch, since kind is what selects the surface.
 	StatementSubjectMismatch = "STATEMENT_SUBJECT_MISMATCH"
+	// ExecBinaryInvalid reports an exec rule binary that is empty or contains
+	// a slash or backslash; only basename patterns are allowed (D1).
+	ExecBinaryInvalid = "EXEC_BINARY_INVALID"
+	// ManifestSurfaceKeyMissing reports that a required surface array key was
+	// absent (a nil slice) rather than declared empty: mcp requires tools,
+	// resources, prompts, and transports; skill requires scripts and
+	// invokesTools.
+	ManifestSurfaceKeyMissing = "MANIFEST_SURFACE_KEY_MISSING"
+	// GeneratedAtInvalid reports a generatedAt timestamp that is zero, not in
+	// UTC, or carries sub second precision.
+	GeneratedAtInvalid = "GENERATED_AT_INVALID"
+	// ManifestFieldRequired reports a required identity string that is empty,
+	// such as artifact.name, a generator field, an mcp tool name, or a
+	// dependency SBOM field when the dependencies block is present.
+	ManifestFieldRequired = "MANIFEST_FIELD_REQUIRED"
+	// SkillScriptPathInvalid reports a skill script path that is not a clean
+	// relative path with forward slashes, or a duplicate script path.
+	SkillScriptPathInvalid = "SKILL_SCRIPT_PATH_INVALID"
+	// StatementSubjectInvalid reports a parsed statement that does not carry
+	// exactly one subject with a non empty name (D6 binds one artifact).
+	StatementSubjectInvalid = "STATEMENT_SUBJECT_INVALID"
 )
 
-// Skill bundle digest codes (spec 4). Task 1.4 defines these ahead of the
-// full registry in Task 1.5.
+// Skill bundle digest codes (spec 4).
 const (
 	// BundleEmpty reports that a skill bundle was given no files to digest.
 	BundleEmpty = "BUNDLE_EMPTY"
@@ -178,6 +222,12 @@ func All() []string {
 		ModeInvalid,
 		DigestInvalid,
 		StatementSubjectMismatch,
+		ExecBinaryInvalid,
+		ManifestSurfaceKeyMissing,
+		GeneratedAtInvalid,
+		ManifestFieldRequired,
+		SkillScriptPathInvalid,
+		StatementSubjectInvalid,
 		BundleEmpty,
 		BundlePathInvalid,
 		BundleDuplicatePath,

@@ -14,6 +14,8 @@ Domain patterns and path patterns, with a `"*"` escape hatch.
 
 **Why**: assayward policy needs patterns, not booleans ("no egress except `api.company.com`"). The escape hatch keeps authoring honest when hosts are dynamic. Reasons stay optional so adoption is not taxed, but the scaffolder nudges for them because they make declarations reviewable (the TC54 story).
 
+Amendment 2026-07-16: filesystem path patterns reject dotdot segments and backslashes; the bundle path hygiene rule applies to declared paths as well.
+
 ## D2: forgeseal integration mode (spec §2.2, §13 Q2)
 
 Exec adapter in v0.1; library import later.

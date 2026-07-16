@@ -13,7 +13,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | Code | Kind | Meaning | Introduced |
 |------|------|---------|------------|
 | `MANIFEST_SCHEMA_VERSION_UNSUPPORTED` | validation | The manifest declares a schemaVersion other than the one this build understands. | M1 |
-| `MANIFEST_KIND_SURFACE_MISMATCH` | validation | The mcp or skill surface present on the manifest does not match the declared artifact kind. | M1 |
+| `MANIFEST_KIND_SURFACE_MISMATCH` | validation | The mcp or skill surface present on the manifest does not match the declared artifact kind, or the statement ref kind disagrees with the predicate artifact kind. | M1 |
 | `MANIFEST_ENUM_INVALID` | validation | The artifact kind or source is not one of the known enum values. | M1 |
 | `MANIFEST_VERSION_REQUIRED` | validation | The artifact version is missing where one is required, meaning every kind except skill. | M1 |
 | `MANIFEST_CAPABILITIES_KEY_MISSING` | validation | One of the five capability keys is absent instead of declared as an empty list. | M1 |
@@ -25,8 +25,14 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `SECRET_FORMAT_INVALID` | validation | A secret entry is not a kind and provider pair matching the allowed grammar. | M1 |
 | `TRANSPORT_INVALID` | validation | An MCP transport is not stdio, http, or sse. | M1 |
 | `MODE_INVALID` | validation | A file mode is not regular or executable. | M1 |
-| `DIGEST_INVALID` | validation | A digest set is empty, has an empty key, or has a value that is not lowercase hex of even length. | M1 |
+| `DIGEST_INVALID` | validation | A digest set is empty, has an empty key, or has a value that is not lowercase hex of even length, or a bundle digest string whose remainder is not exactly sixty four lowercase hex characters. | M1 |
 | `STATEMENT_SUBJECT_MISMATCH` | validation | The artifact reference handed to statement assembly disagrees with the predicate artifact block on name, version, or source. | M1 |
+| `EXEC_BINARY_INVALID` | validation | An exec rule binary is empty or contains a slash or backslash; only basename patterns are allowed. | M1 |
+| `MANIFEST_SURFACE_KEY_MISSING` | validation | A required surface array key is absent instead of declared as an empty list: mcp requires tools, resources, prompts, and transports; skill requires scripts and invokesTools. | M1 |
+| `GENERATED_AT_INVALID` | validation | The generatedAt timestamp is zero, not in UTC, or carries sub second precision. | M1 |
+| `MANIFEST_FIELD_REQUIRED` | validation | A required identity string is empty, such as the artifact name, a generator field, an mcp tool name, or a dependency SBOM field when the dependencies block is present. | M1 |
+| `SKILL_SCRIPT_PATH_INVALID` | validation | A skill script path is not a clean relative path using forward slashes, or two scripts share the same path. | M1 |
+| `STATEMENT_SUBJECT_INVALID` | validation | A parsed statement does not carry exactly one subject with a non empty name. | M1 |
 | `BUNDLE_EMPTY` | validation | A skill bundle was given no files to digest. | M1 |
 | `BUNDLE_PATH_INVALID` | validation | A bundle file path is not a clean relative path using forward slashes. | M1 |
 | `BUNDLE_DUPLICATE_PATH` | validation | Two entries in a bundle share the same path. | M1 |

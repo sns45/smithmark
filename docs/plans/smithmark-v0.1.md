@@ -699,7 +699,7 @@ type File struct { // one already read file; core never touches the filesystem
 func Digest(files []File) (string, error)
 ```
 
-- Consumed by: Task 2.2 (walker), Task 2.5 (statement subject), verify recomputation in Phase 3.
+- Consumed by: Task 2.2 (walker), Task 1.6 (statement subject), verify recomputation in Phase 3.
 
 - [ ] **Step 1: Write the failing tests**
 

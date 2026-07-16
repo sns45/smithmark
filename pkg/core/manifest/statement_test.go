@@ -245,6 +245,63 @@ func TestParseStatementRejectsEmptyInput(t *testing.T) {
 	}
 }
 
+// F8: ParseStatement requires exactly one subject with a non empty name (v1
+// binds one artifact per D6).
+func TestParseStatementSubjectConstraints(t *testing.T) {
+	s, err := NewStatement(mcpRef(), validManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	two := *s
+	two.Subject = []Subject{s.Subject[0], s.Subject[0]}
+	data, err := json.Marshal(&two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseStatement(data); err == nil || !strings.Contains(err.Error(), codes.StatementSubjectInvalid) {
+		t.Errorf("two subjects: expected %s, got %v", codes.StatementSubjectInvalid, err)
+	}
+
+	empty := *s
+	empty.Subject = []Subject{{Name: "", Digest: s.Subject[0].Digest}}
+	data, err = json.Marshal(&empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseStatement(data); err == nil || !strings.Contains(err.Error(), codes.StatementSubjectInvalid) {
+		t.Errorf("empty subject name: expected %s, got %v", codes.StatementSubjectInvalid, err)
+	}
+}
+
+// F9: ParseStatement is structural only. A predicate carrying an unsupported
+// schemaVersion parses cleanly; running Validate on the parsed predicate is
+// the separate semantic stage (M3 reports it as MANIFEST_SCHEMA_VALID).
+func TestParseStatementDoesNotValidatePredicate(t *testing.T) {
+	s, err := NewStatement(mcpRef(), validManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, err := s.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := strings.Replace(string(good), `"schemaVersion":"1.0.0"`, `"schemaVersion":"9.9.9"`, 1)
+	parsed, err := ParseStatement([]byte(broken))
+	if err != nil {
+		t.Fatalf("ParseStatement must be structural only, but rejected an unsupported schemaVersion: %v", err)
+	}
+	found := false
+	for _, is := range parsed.Predicate.Validate() {
+		if is.Code == codes.ManifestSchemaVersionUnsupported {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %s from predicate Validate, got none", codes.ManifestSchemaVersionUnsupported)
+	}
+}
+
 // (e) golden snapshots for the canonical encoding of one mcp-server statement
 // and one skill statement.
 func TestStatementGolden(t *testing.T) {
@@ -324,6 +381,13 @@ func TestSubjectDigestFromBundleRejectsMalformedRemainder(t *testing.T) {
 // TestStatementRoundTrip proves that Canonical and ParseStatement compose to
 // the identity: the parsed value equals the original, and canonicalizing the
 // parsed value reproduces the first canonical bytes exactly.
+//
+// The reflect.DeepEqual on the GeneratedAt time.Time holds because stdlib
+// marshals a UTC time as a trailing Z and parses that Z back to the time.UTC
+// singleton, so both sides share the same location pointer and internal
+// representation. If a fixture ever carries an explicit numeric offset instead
+// of Z, this comparison must switch to time.Time.Equal semantics, which
+// compare instants rather than struct fields.
 func TestStatementRoundTrip(t *testing.T) {
 	original, err := NewStatement(mcpRef(), validManifest())
 	if err != nil {

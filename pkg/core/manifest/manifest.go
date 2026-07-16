@@ -169,14 +169,21 @@ func Parse(data []byte) (*CapabilityManifest, error) {
 	return &m, nil
 }
 
-// Canonical returns the RFC 8785 canonical JSON encoding. All signing and
-// digesting of manifests operates on these bytes and only these bytes.
-func (m *CapabilityManifest) Canonical() ([]byte, error) {
-	raw, err := json.Marshal(m)
+// canonicalJSON marshals v and returns its RFC 8785 canonical form. Both
+// Canonical methods delegate here so a manifest and a statement share one
+// serialization path.
+func canonicalJSON(v any) ([]byte, error) {
+	raw, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
 	return jsoncanonicalizer.Transform(raw)
+}
+
+// Canonical returns the RFC 8785 canonical JSON encoding. All signing and
+// digesting of manifests operates on these bytes and only these bytes.
+func (m *CapabilityManifest) Canonical() ([]byte, error) {
+	return canonicalJSON(m)
 }
 
 // Issue is one semantic validation failure, identified by a stable machine
@@ -191,10 +198,10 @@ const schemaVersion1 = "1.0.0"
 
 // Validate checks a parsed manifest against the semantic rules of spec 3 and
 // decision D1, beyond what strict JSON parsing already enforces. The result
-// is sorted by (Code, Path) for determinism; a nil slice means the manifest
-// is valid.
+// is sorted by (Code, Path) for determinism; a non nil empty slice means the
+// manifest is valid, so a JSON encoding renders [] rather than null.
 func (m *CapabilityManifest) Validate() []Issue {
-	var issues []Issue
+	issues := []Issue{}
 	add := func(code, path, detail string) {
 		issues = append(issues, Issue{Code: code, Path: path, Detail: detail})
 	}
@@ -232,6 +239,29 @@ func (m *CapabilityManifest) Validate() []Issue {
 	// U4: version is required unless the artifact is a skill.
 	if m.Artifact.Kind != KindSkill && m.Artifact.Version == "" {
 		add(codes.ManifestVersionRequired, "artifact.version", "version is required unless kind is skill")
+	}
+
+	// F6: required identity strings that other stages key off must be present.
+	if m.Artifact.Name == "" {
+		add(codes.ManifestFieldRequired, "artifact.name", "artifact.name must not be empty")
+	}
+	if m.Generator.Name == "" {
+		add(codes.ManifestFieldRequired, "generator.name", "generator.name must not be empty")
+	}
+	if m.Generator.Version == "" {
+		add(codes.ManifestFieldRequired, "generator.version", "generator.version must not be empty")
+	}
+
+	// F5: generatedAt must be a non zero UTC timestamp with no sub second
+	// precision.
+	if m.GeneratedAt.IsZero() {
+		add(codes.GeneratedAtInvalid, "generatedAt", "generatedAt must be a non zero timestamp")
+	}
+	if _, offset := m.GeneratedAt.Zone(); offset != 0 {
+		add(codes.GeneratedAtInvalid, "generatedAt", "generatedAt must be in UTC with a zero zone offset")
+	}
+	if m.GeneratedAt.Nanosecond() != 0 {
+		add(codes.GeneratedAtInvalid, "generatedAt", "generatedAt must not carry sub second precision")
 	}
 
 	if m.Capabilities.NetworkEgress == nil {
@@ -276,6 +306,13 @@ func (m *CapabilityManifest) Validate() []Issue {
 		}
 	}
 
+	for i, r := range m.Capabilities.Exec {
+		if !validExecBinary(r.Binary) {
+			add(codes.ExecBinaryInvalid, fmt.Sprintf("capabilities.exec[%d].binary", i),
+				fmt.Sprintf("binary %q must be a non empty basename pattern with no slash or backslash (D1)", r.Binary))
+		}
+	}
+
 	for i, e := range m.Capabilities.Env {
 		if !validEnvName(e) {
 			add(codes.EnvNameInvalid, fmt.Sprintf("capabilities.env[%d]", i),
@@ -291,6 +328,20 @@ func (m *CapabilityManifest) Validate() []Issue {
 	}
 
 	if m.MCP != nil {
+		// F3: every mcp surface array key must be present (non nil), mirroring
+		// the capabilities key rule; a nil slice means the JSON key was absent.
+		if m.MCP.Tools == nil {
+			add(codes.ManifestSurfaceKeyMissing, "mcp.tools", "mcp.tools key is absent; declare it as an empty array if none apply")
+		}
+		if m.MCP.Resources == nil {
+			add(codes.ManifestSurfaceKeyMissing, "mcp.resources", "mcp.resources key is absent; declare it as an empty array if none apply")
+		}
+		if m.MCP.Prompts == nil {
+			add(codes.ManifestSurfaceKeyMissing, "mcp.prompts", "mcp.prompts key is absent; declare it as an empty array if none apply")
+		}
+		if m.MCP.Transports == nil {
+			add(codes.ManifestSurfaceKeyMissing, "mcp.transports", "mcp.transports key is absent; declare it as an empty array if none apply")
+		}
 		for i, tr := range m.MCP.Transports {
 			switch tr {
 			case "stdio", "http", "sse":
@@ -300,6 +351,9 @@ func (m *CapabilityManifest) Validate() []Issue {
 			}
 		}
 		for i, tool := range m.MCP.Tools {
+			if tool.Name == "" {
+				add(codes.ManifestFieldRequired, fmt.Sprintf("mcp.tools[%d].name", i), "mcp tool name must not be empty")
+			}
 			if !validDigestSet(tool.InputSchemaDigest) {
 				add(codes.DigestInvalid, fmt.Sprintf("mcp.tools[%d].inputSchemaDigest", i),
 					"digest set must be non empty with non empty keys and lowercase hex values of even length")
@@ -308,13 +362,22 @@ func (m *CapabilityManifest) Validate() []Issue {
 	}
 
 	if m.Skill != nil {
+		// F3: skill surface array keys must be present (non nil).
+		if m.Skill.Scripts == nil {
+			add(codes.ManifestSurfaceKeyMissing, "skill.scripts", "skill.scripts key is absent; declare it as an empty array if none apply")
+		}
+		if m.Skill.InvokesTools == nil {
+			add(codes.ManifestSurfaceKeyMissing, "skill.invokesTools", "skill.invokesTools key is absent; declare it as an empty array if none apply")
+		}
 		if !validDigestSet(m.Skill.EntryDigest) {
 			add(codes.DigestInvalid, "skill.entryDigest",
 				"digest set must be non empty with non empty keys and lowercase hex values of even length")
 		}
+		seenScript := make(map[string]bool)
 		for i, f := range m.Skill.Scripts {
+			// F12: reuse the bundle mode constants rather than string literals.
 			switch f.Mode {
-			case "regular", "executable":
+			case string(bundle.ModeRegular), string(bundle.ModeExecutable):
 			default:
 				add(codes.ModeInvalid, fmt.Sprintf("skill.scripts[%d].mode", i),
 					fmt.Sprintf("mode %q must be regular or executable", f.Mode))
@@ -323,11 +386,28 @@ func (m *CapabilityManifest) Validate() []Issue {
 				add(codes.DigestInvalid, fmt.Sprintf("skill.scripts[%d].digest", i),
 					"digest set must be non empty with non empty keys and lowercase hex values of even length")
 			}
+			// F7: declared script paths reuse the bundle path validator and
+			// must be unique within the skill surface.
+			if !bundle.ValidPath(f.Path) {
+				add(codes.SkillScriptPathInvalid, fmt.Sprintf("skill.scripts[%d].path", i),
+					fmt.Sprintf("script path %q must be a clean relative path using forward slashes (spec 4)", f.Path))
+			} else if seenScript[f.Path] {
+				add(codes.SkillScriptPathInvalid, fmt.Sprintf("skill.scripts[%d].path", i),
+					fmt.Sprintf("duplicate script path %q", f.Path))
+			}
+			seenScript[f.Path] = true
 		}
 	}
 
 	if m.Dependencies != nil {
-		if !validDigestSet(m.Dependencies.SBOMDigest) {
+		// F6: when the dependencies block is present, its identity fields are
+		// required. An empty digest is reported as missing, not malformed.
+		if m.Dependencies.SBOMFormat == "" {
+			add(codes.ManifestFieldRequired, "dependencies.sbomFormat", "dependencies.sbomFormat must not be empty")
+		}
+		if len(m.Dependencies.SBOMDigest) == 0 {
+			add(codes.ManifestFieldRequired, "dependencies.sbomDigest", "dependencies.sbomDigest must not be empty")
+		} else if !validDigestSet(m.Dependencies.SBOMDigest) {
 			add(codes.DigestInvalid, "dependencies.sbomDigest",
 				"digest set must be non empty with non empty keys and lowercase hex values of even length")
 		}
@@ -353,8 +433,10 @@ func validHost(host string) bool {
 	if host == "" {
 		return false
 	}
-	if _, err := netip.ParseAddr(host); err == nil {
-		return true
+	if addr, err := netip.ParseAddr(host); err == nil {
+		// F13: reject IPv6 zone literals such as fe80::1%eth0; a scoped
+		// address is not a stable egress destination.
+		return addr.Zone() == ""
 	}
 	labels := strings.Split(host, ".")
 	for i, label := range labels {
@@ -376,10 +458,19 @@ var fsPathTokens = []string{"${home}", "${tmp}", "${cwd}"}
 // it starts with a portability token followed by "/" (or is exactly the
 // token), or it is relative (no leading "/", no drive letter); bare "*" or
 // "**" are accepted as the escape hatch. A token immediately followed by any
-// character other than "/" is malformed, for example "${home}x".
+// character other than "/" is malformed, for example "${home}x". Backslashes
+// and any ".." segment are rejected outright (F4), including after a token.
 func validFSPath(path string) bool {
 	if path == "" {
 		return false
+	}
+	if strings.Contains(path, `\`) {
+		return false
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return false
+		}
 	}
 	if path == "*" || path == "**" {
 		return true
@@ -417,6 +508,16 @@ var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*\*?$`)
 // validEnvName reports whether name matches the D1 env name grammar.
 func validEnvName(name string) bool {
 	return envName.MatchString(name)
+}
+
+// validExecBinary reports whether b is a basename pattern (D1): non empty and
+// free of "/" and "\\". Bare "*" and interior "*" are allowed, so "python*"
+// and "*" both pass.
+func validExecBinary(b string) bool {
+	if b == "" {
+		return false
+	}
+	return !strings.ContainsAny(b, `/\`)
 }
 
 // secretPart matches one side of a secret's kind:provider pair (D1).
@@ -487,34 +588,40 @@ type Statement struct { // in-toto Statement v1 with a typed predicate.
 // the subject: purl name for npm and pypi (pkg:npm/name@version with @scope
 // encoded as %40scope), plain name for skills, image ref for oci. Skill
 // subjects use the digest key "smithmark-bundle-v1" (U4).
+//
+// The returned Statement aliases the given manifest and digest set rather than
+// copying them: Predicate points at m and the subject shares ref.Digest.
+// Callers must not mutate m or ref.Digest after assembly, because Canonical
+// serializes whatever state they hold at call time, and the validation done
+// here would then be bypassed.
 func NewStatement(ref ArtifactRef, m *CapabilityManifest) (*Statement, error) {
 	if m == nil {
 		return nil, errors.New("NewStatement: manifest must not be nil")
 	}
 	if issues := m.Validate(); len(issues) > 0 {
 		first := issues[0]
-		return nil, fmt.Errorf("%s: manifest is invalid at %s: %s", first.Code, first.Path, first.Detail)
+		return nil, codes.E(first.Code, "manifest is invalid at %s: %s", first.Path, first.Detail)
 	}
 
 	if ref.Kind != m.Artifact.Kind {
-		return nil, fmt.Errorf("%s: ref kind %q does not match predicate artifact kind %q",
-			codes.ManifestKindSurfaceMismatch, ref.Kind, m.Artifact.Kind)
+		return nil, codes.E(codes.ManifestKindSurfaceMismatch,
+			"ref kind %q does not match predicate artifact kind %q", ref.Kind, m.Artifact.Kind)
 	}
 	if ref.Name != m.Artifact.Name {
-		return nil, fmt.Errorf("%s: ref name %q does not match predicate artifact name %q",
-			codes.StatementSubjectMismatch, ref.Name, m.Artifact.Name)
+		return nil, codes.E(codes.StatementSubjectMismatch,
+			"ref name %q does not match predicate artifact name %q", ref.Name, m.Artifact.Name)
 	}
 	if ref.Version != m.Artifact.Version {
-		return nil, fmt.Errorf("%s: ref version %q does not match predicate artifact version %q",
-			codes.StatementSubjectMismatch, ref.Version, m.Artifact.Version)
+		return nil, codes.E(codes.StatementSubjectMismatch,
+			"ref version %q does not match predicate artifact version %q", ref.Version, m.Artifact.Version)
 	}
 	if ref.Source != m.Artifact.Source {
-		return nil, fmt.Errorf("%s: ref source %q does not match predicate artifact source %q",
-			codes.StatementSubjectMismatch, ref.Source, m.Artifact.Source)
+		return nil, codes.E(codes.StatementSubjectMismatch,
+			"ref source %q does not match predicate artifact source %q", ref.Source, m.Artifact.Source)
 	}
 	if !validDigestSet(ref.Digest) {
-		return nil, fmt.Errorf("%s: ref digest must be a non empty digest set with non empty keys and lowercase hex values of even length",
-			codes.DigestInvalid)
+		return nil, codes.E(codes.DigestInvalid,
+			"ref digest must be a non empty digest set with non empty keys and lowercase hex values of even length")
 	}
 
 	return &Statement{
@@ -558,18 +665,19 @@ func purlName(ecosystem, name, version string) string {
 // Phase 3 verifies over them, exactly as CapabilityManifest.Canonical does
 // for a bare predicate.
 func (s *Statement) Canonical() ([]byte, error) {
-	raw, err := json.Marshal(s)
-	if err != nil {
-		return nil, err
-	}
-	return jsoncanonicalizer.Transform(raw)
+	return canonicalJSON(s)
 }
 
 // ParseStatement decodes an in-toto statement strictly: unknown fields are
 // errors at every nesting level, the envelope type must equal
 // "https://in-toto.io/Statement/v1", the predicate type must equal
-// PredicateType, the subject must be non empty, and the predicate must be
-// present.
+// PredicateType, there must be exactly one subject with a non empty name and a
+// well formed digest, and the predicate must be present.
+//
+// ParseStatement is structural only. It deliberately does not run predicate
+// semantic validation: a predicate whose schemaVersion is unsupported parses
+// cleanly here. Semantic validation is a separate stage, Validate on the
+// parsed predicate, run by verification (M3 reports it as MANIFEST_SCHEMA_VALID).
 func ParseStatement(data []byte) (*Statement, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -586,13 +694,17 @@ func ParseStatement(data []byte) (*Statement, error) {
 	if s.PredicateType != PredicateType {
 		return nil, fmt.Errorf("statement parse: unexpected predicateType %q, want %q", s.PredicateType, PredicateType)
 	}
-	if len(s.Subject) == 0 {
-		return nil, errors.New("statement parse: subject must not be empty")
+	if len(s.Subject) != 1 {
+		return nil, codes.E(codes.StatementSubjectInvalid,
+			"statement parse: expected exactly one subject, got %d", len(s.Subject))
+	}
+	if s.Subject[0].Name == "" {
+		return nil, codes.E(codes.StatementSubjectInvalid, "statement parse: subject name must not be empty")
 	}
 	for i, sub := range s.Subject {
 		if !validDigestSet(sub.Digest) {
-			return nil, fmt.Errorf("%s: statement parse: subject[%d] digest must be a non empty digest set with non empty keys and lowercase hex values of even length",
-				codes.DigestInvalid, i)
+			return nil, codes.E(codes.DigestInvalid,
+				"statement parse: subject[%d] digest must be a non empty digest set with non empty keys and lowercase hex values of even length", i)
 		}
 	}
 	if s.Predicate == nil {
@@ -617,8 +729,8 @@ func SubjectDigestFromBundle(prefixed string) (DigestSet, error) {
 	}
 	digestHex := strings.TrimPrefix(prefixed, bundle.Prefix)
 	if len(digestHex) != bundleDigestHexLen || !hexDigest.MatchString(digestHex) {
-		return nil, fmt.Errorf("%s: bundle digest value must be exactly %d lowercase hex characters, got %q",
-			codes.DigestInvalid, bundleDigestHexLen, digestHex)
+		return nil, codes.E(codes.DigestInvalid,
+			"bundle digest value must be exactly %d lowercase hex characters, got %q", bundleDigestHexLen, digestHex)
 	}
 	return DigestSet{bundleDigestKey: digestHex}, nil
 }
