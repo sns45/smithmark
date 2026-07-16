@@ -24,6 +24,18 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+func TestParseRejectsTrailingData(t *testing.T) {
+	if _, err := Parse([]byte(validMCP + "{}")); err == nil {
+		t.Error("trailing data after the JSON document accepted; Parse must reject it")
+	}
+}
+
+func TestParseRejectsEmptyInput(t *testing.T) {
+	if _, err := Parse(nil); err == nil {
+		t.Error("empty input accepted; Parse must return an error")
+	}
+}
+
 func TestParseRejectsUnknownFields(t *testing.T) {
 	for name, doc := range map[string]string{
 		"top level": strings.Replace(validMCP, `"schemaVersion"`, `"extra": 1, "schemaVersion"`, 1),
@@ -50,5 +62,22 @@ func TestCanonicalIsDeterministicAndSorted(t *testing.T) {
 	}
 	if strings.Contains(string(a), "\n") || strings.Contains(string(a), ": ") {
 		t.Error("Canonical output contains insignificant whitespace")
+	}
+	// Key ORDER is the observable that distinguishes RFC 8785 output from
+	// plain json.Marshal: the struct declares schemaVersion first, so an
+	// implementation that skipped the canonicalizer would emit it first.
+	// Each key below appears exactly once in this document, all at the top
+	// level, so index comparison checks alphabetical ordering directly.
+	keys := []string{`"artifact"`, `"capabilities"`, `"generatedAt"`, `"generator"`, `"mcp"`, `"schemaVersion"`}
+	prev := -1
+	for _, k := range keys {
+		i := strings.Index(string(a), k)
+		if i < 0 {
+			t.Fatalf("Canonical output missing key %s", k)
+		}
+		if i <= prev {
+			t.Errorf("Canonical output keys not in alphabetical order: %s at %d does not follow previous key at %d", k, i, prev)
+		}
+		prev = i
 	}
 }
