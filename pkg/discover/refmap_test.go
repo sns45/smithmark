@@ -1,7 +1,6 @@
 package discover
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
@@ -9,17 +8,16 @@ import (
 	"github.com/sns45/smithmark/pkg/core/manifest"
 )
 
-// ociTagGrammar is the OCI distribution spec tag grammar
-// ([a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}), asserted here in a test rather than at
-// runtime in AttestationRef, per the Task 2.6 resolution: production tags are
-// built from a fixed constant prefix plus lowercase hex plus ".att", so the
-// shape is provably safe by construction and does not need a runtime check.
-var ociTagGrammar = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
-
-// assertValidOCITag fails t if tag does not match the OCI tag grammar.
+// assertValidOCITag fails t if tag does not match the OCI distribution spec
+// tag grammar. Production tags are built from a fixed constant prefix plus
+// lowercase hex plus ".att", so the shape is provably safe by construction
+// and AttestationRef itself does not need a runtime check (Task 2.6
+// resolution); this test asserts that guarantee holds, reusing the same
+// ValidOCITag helper (Task 2.7) that pkg/compose's push path calls as its own
+// last line of defense against a hand built tag.
 func assertValidOCITag(t *testing.T, tag string) {
 	t.Helper()
-	if !ociTagGrammar.MatchString(tag) {
+	if !ValidOCITag(tag) {
 		t.Errorf("tag %q does not match the OCI tag grammar", tag)
 	}
 }

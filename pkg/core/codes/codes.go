@@ -220,6 +220,16 @@ const (
 	// means the platform itself cannot sign; this code means the platform can
 	// sign but the caller told it nothing to sign with.
 	SigningConfigInvalid = "SIGNING_CONFIG_INVALID"
+	// PublishBundleInvalid reports that PushAttestation or AttachReferrer was
+	// given a nil signed bundle, or one carrying no bundle bytes, to push.
+	PublishBundleInvalid = "PUBLISH_BUNDLE_INVALID"
+	// PublishTagInvalid reports that a tag handed to PushAttestation does not
+	// match the OCI distribution spec tag grammar. pkg/discover.AttestationRef
+	// is the normative producer of push tags and already builds them in a
+	// provably safe shape (Task 2.6); this code fires only when a caller
+	// supplies some other tag by hand, and it is checked before any push is
+	// attempted.
+	PublishTagInvalid = "PUBLISH_TAG_INVALID"
 )
 
 // All returns every registered code.
@@ -275,5 +285,7 @@ func All() []string {
 		AttestationBaseUnknown,
 		ToolExtractionFailed,
 		SigningConfigInvalid,
+		PublishBundleInvalid,
+		PublishTagInvalid,
 	}
 }
