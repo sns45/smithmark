@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sns45/smithmark/pkg/core/bundle"
 	"github.com/sns45/smithmark/pkg/core/codes"
 	"github.com/sns45/smithmark/pkg/core/manifest"
 	"github.com/sns45/smithmark/pkg/discover"
@@ -83,9 +85,15 @@ func replace(t *testing.T, doc, line, with string) string {
 }
 
 func TestLoadDeclaredValidFixture(t *testing.T) {
-	m, err := discover.LoadDeclared(fixturePath)
+	decl, err := discover.LoadDeclared(fixturePath)
 	if err != nil {
 		t.Fatalf("LoadDeclared: %v", err)
+	}
+	// LoadDeclared now returns a Declaration wrapping the manifest alongside
+	// the skill only executables list (Task 2.2's sanctioned API change).
+	m := decl.Manifest
+	if decl.Executables != nil {
+		t.Errorf("Executables = %v, want nil for an mcp-server declaration", decl.Executables)
 	}
 
 	// The loader returns a partial manifest by design: it never reads the
@@ -163,9 +171,13 @@ func TestLoadDeclaredValidFixture(t *testing.T) {
 }
 
 func TestLoadDeclaredSkill(t *testing.T) {
-	m, err := discover.LoadDeclared(writeDecl(t, validSkillDecl))
+	decl, err := discover.LoadDeclared(writeDecl(t, validSkillDecl))
 	if err != nil {
 		t.Fatalf("LoadDeclared: %v", err)
+	}
+	m := decl.Manifest
+	if decl.Executables != nil {
+		t.Errorf("Executables = %v, want nil when smithmark.yaml declares no executables key", decl.Executables)
 	}
 	if m.Artifact.Kind != manifest.KindSkill || m.Artifact.Version != "" {
 		t.Errorf("Artifact = %+v, want kind skill with no version", m.Artifact)
@@ -270,5 +282,252 @@ func TestLoadDeclaredRequiredKeys(t *testing.T) {
 				t.Fatalf("code = %s, want %s (err: %v)", cerr.Code, tc.want, err)
 			}
 		})
+	}
+}
+
+// validSkillDeclWithExecutables extends validSkillDecl with the optional
+// executables key (Task 2.2): the walker's platform independent mode rule
+// reads this list from the declaration rather than trusting a filesystem
+// bit that Windows does not have.
+const validSkillDeclWithExecutables = `kind: skill
+name: hello-skill
+source: local
+skill:
+  invokesTools: []
+  executables:
+    - scripts/greet.sh
+    - bin/tool
+capabilities:
+  networkEgress: []
+  filesystem: []
+  exec: []
+  env: []
+  secrets: []
+`
+
+func TestLoadDeclaredSkillExecutablesRoundTrip(t *testing.T) {
+	decl, err := discover.LoadDeclared(writeDecl(t, validSkillDeclWithExecutables))
+	if err != nil {
+		t.Fatalf("LoadDeclared: %v", err)
+	}
+	want := []string{"scripts/greet.sh", "bin/tool"}
+	if !reflect.DeepEqual(decl.Executables, want) {
+		t.Errorf("Executables = %v, want %v", decl.Executables, want)
+	}
+}
+
+// The executables key lives inside the skill block, so declaring it on an
+// mcp-server document hits the same kind versus surface mismatch check that
+// any skill block on an mcp kind already triggers; this test pins that the
+// specific combination (executables present) is rejected too, per the
+// controller resolution.
+func TestLoadDeclaredExecutablesRejectedOnMCPKind(t *testing.T) {
+	doc := validMCPDecl + "skill:\n  invokesTools: []\n  executables: [scripts/greet.sh]\n"
+	_, err := discover.LoadDeclared(writeDecl(t, doc))
+	var cerr *codes.Error
+	if !errors.As(err, &cerr) {
+		t.Fatalf("err = %v, want a *codes.Error carrying %s", err, codes.ManifestKindSurfaceMismatch)
+	}
+	if cerr.Code != codes.ManifestKindSurfaceMismatch {
+		t.Fatalf("code = %s, want %s (err: %v)", cerr.Code, codes.ManifestKindSurfaceMismatch, err)
+	}
+}
+
+// skillFixturePath points at the committed repo root fixture skill, used to
+// pin the canonical bundle digest end to end through the walker.
+const skillFixturePath = "../../testdata/skills/hello-skill"
+
+// pinnedHelloSkillDigest is computed once from the fixture at implementation
+// time and then frozen, mirroring pkg/core/bundle's own golden vector rule:
+// recompute only if the algorithm is believed wrong, never to make a failing
+// test pass.
+const pinnedHelloSkillDigest = "smithmark-bundle-v1:a4bdaaa7fd43eeca9269a369f0be3c87a9dedc8e052872064ad19ed26e27edda"
+
+func TestWalkSkillGoldenDigest(t *testing.T) {
+	files, _, _, err := discover.WalkSkill(skillFixturePath, []string{"scripts/greet.sh"})
+	if err != nil {
+		t.Fatalf("WalkSkill: %v", err)
+	}
+	got, err := bundle.Digest(files)
+	if err != nil {
+		t.Fatalf("bundle.Digest: %v", err)
+	}
+	if got != pinnedHelloSkillDigest {
+		t.Errorf("digest drifted from the pinned fixture vector\n got: %s\nwant: %s", got, pinnedHelloSkillDigest)
+	}
+}
+
+func TestWalkSkillSurfaceAndFrontmatter(t *testing.T) {
+	files, surface, info, err := discover.WalkSkill(skillFixturePath, []string{"scripts/greet.sh"})
+	if err != nil {
+		t.Fatalf("WalkSkill: %v", err)
+	}
+
+	if info.Name != "hello-skill" || info.Version != "0.1.0" {
+		t.Errorf("SkillInfo = %+v, want name hello-skill version 0.1.0", info)
+	}
+
+	// smithmark.yaml and SKILL.md are files under the root, so they are part
+	// of the walked file set and thus the digest: the declaration ships
+	// inside the bundle by design.
+	wantModes := map[string]bundle.Mode{
+		"SKILL.md":            bundle.ModeRegular,
+		"scripts/greet.sh":    bundle.ModeExecutable,
+		"references/notes.md": bundle.ModeRegular,
+		"smithmark.yaml":      bundle.ModeRegular,
+	}
+	if len(files) != len(wantModes) {
+		t.Fatalf("files = %+v, want %d entries", files, len(wantModes))
+	}
+	for _, f := range files {
+		want, ok := wantModes[f.Path]
+		if !ok {
+			t.Errorf("unexpected path %q in walked file set", f.Path)
+			continue
+		}
+		if f.Mode != want {
+			t.Errorf("path %q mode = %s, want %s", f.Path, f.Mode, want)
+		}
+		if f.SHA256 == "" {
+			t.Errorf("path %q has an empty sha256", f.Path)
+		}
+	}
+
+	if surface.InvokesTools != nil {
+		t.Errorf("InvokesTools = %v, want nil; the declaration owns this key, not the walker", surface.InvokesTools)
+	}
+	if len(surface.Scripts) != 3 {
+		t.Fatalf("Scripts = %+v, want 3 entries (every file except SKILL.md)", surface.Scripts)
+	}
+	for i := 1; i < len(surface.Scripts); i++ {
+		if surface.Scripts[i-1].Path >= surface.Scripts[i].Path {
+			t.Errorf("Scripts not sorted by path: %+v", surface.Scripts)
+		}
+	}
+	for _, s := range surface.Scripts {
+		if s.Path == "SKILL.md" {
+			t.Error("SKILL.md must not appear in Scripts; it is the entry point")
+		}
+	}
+	if surface.EntryDigest["sha256"] == "" {
+		t.Error("EntryDigest is empty")
+	}
+}
+
+func TestWalkSkillMissingSKILLMD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := discover.WalkSkill(dir, nil)
+	var cerr *codes.Error
+	if !errors.As(err, &cerr) {
+		t.Fatalf("err = %v, want a *codes.Error carrying %s", err, codes.ManifestFieldRequired)
+	}
+	if cerr.Code != codes.ManifestFieldRequired {
+		t.Fatalf("code = %s, want %s (err: %v)", cerr.Code, codes.ManifestFieldRequired, err)
+	}
+	if !strings.Contains(cerr.Detail, "SKILL.md") {
+		t.Errorf("error detail %q does not name SKILL.md", cerr.Detail)
+	}
+}
+
+func TestWalkSkillRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(target, []byte("---\nname: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "sneaky")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symlink on this platform: %v", err)
+	}
+	_, _, _, err := discover.WalkSkill(dir, nil)
+	var cerr *codes.Error
+	if !errors.As(err, &cerr) {
+		t.Fatalf("err = %v, want a *codes.Error carrying %s", err, codes.BundleSymlinkRejected)
+	}
+	if cerr.Code != codes.BundleSymlinkRejected {
+		t.Fatalf("code = %s, want %s (err: %v)", cerr.Code, codes.BundleSymlinkRejected, err)
+	}
+	if !strings.Contains(cerr.Detail, "sneaky") {
+		t.Errorf("error detail %q does not name the offending path", cerr.Detail)
+	}
+}
+
+func TestWalkSkillFrontmatterExtraction(t *testing.T) {
+	dir := t.TempDir()
+	doc := "---\nname: sample\nversion: 2.3.4\n---\n\nBody paragraph.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, info, err := discover.WalkSkill(dir, nil)
+	if err != nil {
+		t.Fatalf("WalkSkill: %v", err)
+	}
+	if info.Name != "sample" || info.Version != "2.3.4" {
+		t.Errorf("SkillInfo = %+v, want name sample version 2.3.4", info)
+	}
+}
+
+// A declared executable must get ModeExecutable even when the file has no
+// executable bit on disk: the declaration list is what makes the digest
+// platform independent, so it must win regardless of what git or the local
+// filesystem happen to report.
+func TestWalkSkillDeclaredExecutableForcesModeWithoutDiskBit(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, _, _, err := discover.WalkSkill(dir, []string{"run.sh"})
+	if err != nil {
+		t.Fatalf("WalkSkill: %v", err)
+	}
+	found := false
+	for _, f := range files {
+		if f.Path == "run.sh" {
+			found = true
+			if f.Mode != bundle.ModeExecutable {
+				t.Errorf("declared executable run.sh has mode %s, want %s", f.Mode, bundle.ModeExecutable)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("run.sh not found in walked file set")
+	}
+}
+
+// An undeclared file with the unix executable bit set falls back to
+// ModeExecutable; this fallback only makes sense on unix, since Windows has
+// no such bit to report.
+func TestWalkSkillUndeclaredExecBitOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix executable bit fallback does not apply on windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files, _, _, err := discover.WalkSkill(dir, nil)
+	if err != nil {
+		t.Fatalf("WalkSkill: %v", err)
+	}
+	found := false
+	for _, f := range files {
+		if f.Path == "run.sh" {
+			found = true
+			if f.Mode != bundle.ModeExecutable {
+				t.Errorf("undeclared exec bit file run.sh has mode %s, want %s", f.Mode, bundle.ModeExecutable)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("run.sh not found in walked file set")
 	}
 }
