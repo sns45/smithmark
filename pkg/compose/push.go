@@ -32,15 +32,23 @@ import (
 // make their output reproducible.
 const bundleManifestCreatedAnnotation = "1970-01-01T00:00:00Z"
 
-// validateBundle rejects a nil SignedBundle, or one carrying no bundle
-// bytes, coded PUBLISH_BUNDLE_INVALID, before either PushAttestation or
-// AttachReferrer attempts any I/O.
+// validateBundle rejects a nil SignedBundle, one carrying no bundle bytes,
+// or one carrying an empty MediaType, coded PUBLISH_BUNDLE_INVALID, before
+// either PushAttestation or AttachReferrer attempts any I/O. The MediaType
+// check matters on its own: packBundle reads bundle.MediaType for both the
+// layer mediaType and the manifest artifactType, and oras.PushBytes would
+// otherwise happily push the layer blob under an empty mediaType before
+// oras.PackManifest ever got a chance to reject it, an uncoded write that
+// this check exists to prevent.
 func validateBundle(bundle *SignedBundle) error {
 	if bundle == nil {
 		return codes.E(codes.PublishBundleInvalid, "signed bundle is nil")
 	}
 	if len(bundle.Bundle) == 0 {
 		return codes.E(codes.PublishBundleInvalid, "signed bundle carries no bundle bytes")
+	}
+	if bundle.MediaType == "" {
+		return codes.E(codes.PublishBundleInvalid, "signed bundle carries an empty MediaType")
 	}
 	return nil
 }

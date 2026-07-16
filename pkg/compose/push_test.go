@@ -141,6 +141,34 @@ func TestPushAttestationRejectsEmptyBundle(t *testing.T) {
 	assertCode(t, err, codes.PublishBundleInvalid)
 }
 
+// TestPushAttestationRejectsEmptyMediaType asserts a bundle with real, non
+// empty Bundle bytes but an empty MediaType is rejected before any push:
+// packBundle reads bundle.MediaType for the layer's own mediaType, so
+// without this check oras.PushBytes would push the layer blob before
+// oras.PackManifest ever got a chance to reject the empty artifactType,
+// an uncoded write the coded error contract must prevent. The store is
+// asserted to have received no content at all: the digest a push of these
+// exact bytes would produce depends only on the bytes, not on MediaType, so
+// checking that descriptor is absent proves the blob write never happened.
+func TestPushAttestationRejectsEmptyMediaType(t *testing.T) {
+	ctx := context.Background()
+	target := memory.New()
+	bundle := &SignedBundle{Bundle: []byte(`{"fake":"bundle"}`), MediaType: ""}
+
+	_, err := PushAttestation(ctx, target, "registry.example.com/attest/npm/example", "sha512-abc.att", bundle)
+	assertCode(t, err, codes.PublishBundleInvalid)
+
+	wouldBePushed := content.NewDescriptorFromBytes(bundle.MediaType, bundle.Bundle)
+	if exists, err := target.Exists(ctx, wouldBePushed); err != nil {
+		t.Fatalf("checking existence: %v", err)
+	} else if exists {
+		t.Error("bundle bytes were pushed to the store even though validation should have rejected the bundle before any push")
+	}
+	if _, err := target.Resolve(ctx, "sha512-abc.att"); err == nil {
+		t.Error("tag resolved even though PushAttestation should have rejected the bundle before any push")
+	}
+}
+
 // TestPushAttestationRejectsInvalidTag asserts a tag violating the OCI tag
 // grammar errors before any push is attempted: the tag never resolves
 // afterward, proving no manifest was pushed and then merely left untagged.
@@ -211,6 +239,36 @@ func TestAttachReferrerRejectsNilBundle(t *testing.T) {
 
 	_, err := AttachReferrer(ctx, target, subjectDesc, nil)
 	assertCode(t, err, codes.PublishBundleInvalid)
+}
+
+// TestAttachReferrerRejectsEmptyMediaType mirrors
+// TestPushAttestationRejectsEmptyMediaType for the referrer path: a bundle
+// with real Bundle bytes but an empty MediaType is rejected before any push,
+// and the store is shown to have received no content and gained no new
+// predecessor of subjectDesc.
+func TestAttachReferrerRejectsEmptyMediaType(t *testing.T) {
+	ctx := context.Background()
+	target := memory.New()
+	subjectDesc := fabricatedSubject(t, ctx, target)
+	bundle := &SignedBundle{Bundle: []byte(`{"fake":"bundle"}`), MediaType: ""}
+
+	_, err := AttachReferrer(ctx, target, subjectDesc, bundle)
+	assertCode(t, err, codes.PublishBundleInvalid)
+
+	wouldBePushed := content.NewDescriptorFromBytes(bundle.MediaType, bundle.Bundle)
+	if exists, err := target.Exists(ctx, wouldBePushed); err != nil {
+		t.Fatalf("checking existence: %v", err)
+	} else if exists {
+		t.Error("bundle bytes were pushed to the store even though validation should have rejected the bundle before any push")
+	}
+
+	predecessors, err := target.Predecessors(ctx, subjectDesc)
+	if err != nil {
+		t.Fatalf("querying predecessors: %v", err)
+	}
+	if len(predecessors) != 0 {
+		t.Errorf("predecessors = %v, want none: no referrer manifest should have been pushed", predecessors)
+	}
 }
 
 // TestPushWithDiscoveredTagShape proves the two Task 2.6 and Task 2.7
