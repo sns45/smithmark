@@ -31,11 +31,12 @@ jobs:
 
       # Static validation of the release config, so a broken .goreleaser.yaml is
       # caught on every PR rather than only at tag time. Run via the ephemeral
-      # go run form Task 2.9 used, so no separate action install is needed;
-      # ubuntu only, since the check is platform independent.
+      # go run form Task 2.9 used, pinned to the version Task 2.9 resolved
+      # rather than @latest so the check stays reproducible; ubuntu only, since
+      # the check is platform independent.
       - name: goreleaser check
         if: matrix.os == 'ubuntu-latest'
-        run: go run github.com/goreleaser/goreleaser/v2@latest check
+        run: go run github.com/goreleaser/goreleaser/v2@v2.17.0 check
 
   # Proves the wasip1 carried constraint (spec 2.1): the signing layer's stub
   # compiles under GOOS=wasip1 and sigstore-go stays out of the wasip1

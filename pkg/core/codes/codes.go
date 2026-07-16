@@ -237,7 +237,9 @@ const (
 	// AttestSubjectUnresolved reports that attest could not resolve exactly one
 	// subject artifact to attest. For an mcp-server it means no --tarball was
 	// supplied and the artifact root held zero, or more than one, *.tgz tarball
-	// to digest, so the subject is ambiguous and attest fails closed rather
+	// to digest, so the subject is ambiguous; or the chosen tarball is not a
+	// gzip stream, cannot be read as a tar, or carries no package/package.json,
+	// so it is not an npm package tarball at all. attest fails closed rather
 	// than guessing which one to attest.
 	AttestSubjectUnresolved = "ATTEST_SUBJECT_UNRESOLVED"
 	// InternalError reports that an error carrying no registry code reached the

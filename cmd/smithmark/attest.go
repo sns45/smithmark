@@ -107,10 +107,12 @@ func runAttest(ctx context.Context, d *deps, root string, o *attestOptions) erro
 		// When writing a bundle to a file, publish the raw SBOM as a sidecar
 		// next to it and point the manifest's dependencies locator at that
 		// file, before the manifest is validated and signed so the locator is
-		// covered by the signature. When pushing instead (no --output), the
-		// locator is left empty on purpose: SBOM publication and locator
-		// assignment land with M3 discovery or M6 release wiring (D2).
-		if o.output != "" {
+		// covered by the signature. A dry run writes nothing to disk even when
+		// --output is also passed, so the sidecar is gated on not being a dry
+		// run. When pushing instead (no --output), the locator is left empty
+		// on purpose: SBOM publication and locator assignment land with M3
+		// discovery or M6 release wiring (D2).
+		if o.output != "" && !o.dryRun {
 			sbomPath := o.output + ".sbom.json"
 			if err := os.WriteFile(sbomPath, res.BOM, 0o644); err != nil {
 				return fmt.Errorf("attest: writing SBOM to %s: %w", sbomPath, err)

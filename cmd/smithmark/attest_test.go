@@ -195,6 +195,24 @@ func statementFromFakeBundle(t *testing.T, bundleBytes []byte) *manifest.Stateme
 	return stmt
 }
 
+// TestAttestDryRunOutputWritesNothing proves a dry run never touches disk even
+// when --output is also passed: no sidecar (and no bundle) is written.
+func TestAttestDryRunOutputWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "bundle.json")
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	if code := runMain(d, []string{"attest", "--dry-run", "--output", out, skillFixturePath}); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	for _, p := range []string{out, out + ".sbom.json"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("dry run wrote %s (stat err = %v); it must leave no files on disk", p, err)
+		}
+	}
+}
+
 // TestAttestDryRunIdempotent proves the dry run is deterministic: two runs
 // with identical deps produce byte identical stdout, the property the golden
 // snapshot rests on.
