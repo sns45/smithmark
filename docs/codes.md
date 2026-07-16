@@ -59,3 +59,4 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `SBOM_FORGESEAL_VERSION_UNSUPPORTED` | operational | The installed forgeseal binary is older than the minimum version this build requires; reserved for M2. | M1 |
 | `REF_UNMAPPABLE` | operational | An artifact name could not be mapped to a valid OCI repository path segment; reserved for M2 and M3. | M1 |
 | `ATTESTATION_BASE_UNKNOWN` | operational | No attestation base registry could be resolved from the flag, the environment variable, or the package.json key; reserved for M2 and M3. | M1 |
+| `TOOL_EXTRACTION_FAILED` | operational | Extracting the MCP tool listing from a running stdio server failed: the process could not be started or exited unexpectedly, the protocol handshake did not match, or the context deadline was exceeded before tools/list returned. | M2 |

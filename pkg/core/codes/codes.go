@@ -201,6 +201,11 @@ const (
 	// could be resolved from the flag, environment variable, or package.json
 	// key.
 	AttestationBaseUnknown = "ATTESTATION_BASE_UNKNOWN"
+	// ToolExtractionFailed reports that extracting the MCP tool listing from
+	// a running stdio server failed: the process could not be started or
+	// exited unexpectedly, the protocol handshake did not match, or the
+	// context deadline was exceeded before tools/list returned.
+	ToolExtractionFailed = "TOOL_EXTRACTION_FAILED"
 )
 
 // All returns every registered code.
@@ -253,5 +258,6 @@ func All() []string {
 		SBOMForgesealVersionUnsupported,
 		RefUnmappable,
 		AttestationBaseUnknown,
+		ToolExtractionFailed,
 	}
 }

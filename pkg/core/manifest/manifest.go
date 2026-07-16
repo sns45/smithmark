@@ -6,6 +6,8 @@ package manifest
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -184,6 +186,28 @@ func canonicalJSON(v any) ([]byte, error) {
 // digesting of manifests operates on these bytes and only these bytes.
 func (m *CapabilityManifest) Canonical() ([]byte, error) {
 	return canonicalJSON(m)
+}
+
+// SchemaDigest computes the sha256 digest of the RFC 8785 canonical encoding
+// of an MCP tool's inputSchema (decision U2). It delegates to canonicalJSON,
+// the same helper Canonical and Statement.Canonical use, so canonicalization
+// never lives in two places: a change here and a change to manifest encoding
+// can never silently diverge. schema must be non empty.
+//
+// SchemaDigest is pure and does no I/O, unlike pkg/discover.ExtractTools,
+// which executes an MCP server to obtain the schema in the first place;
+// smithmark verify and smithmark lint may call SchemaDigest freely, but must
+// never call ExtractTools (U2).
+func SchemaDigest(schema json.RawMessage) (DigestSet, error) {
+	if len(schema) == 0 {
+		return nil, errors.New("SchemaDigest: schema must not be empty")
+	}
+	canon, err := canonicalJSON(schema)
+	if err != nil {
+		return nil, fmt.Errorf("SchemaDigest: %w", err)
+	}
+	sum := sha256.Sum256(canon)
+	return DigestSet{"sha256": hex.EncodeToString(sum[:])}, nil
 }
 
 // Issue is one semantic validation failure, identified by a stable machine
