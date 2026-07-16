@@ -53,6 +53,29 @@ const (
 	DigestInvalid = "DIGEST_INVALID"
 )
 
+// Skill bundle digest codes (spec 4). Task 1.4 defines these ahead of the
+// full registry in Task 1.5.
+const (
+	// BundleEmpty reports that a skill bundle was given no files to digest.
+	BundleEmpty = "BUNDLE_EMPTY"
+	// BundlePathInvalid reports a file path that is not a clean relative path
+	// with forward slashes, for example an absolute path, a backslash, or a
+	// dotdot segment.
+	BundlePathInvalid = "BUNDLE_PATH_INVALID"
+	// BundleDuplicatePath reports two entries in a bundle with the same path.
+	BundleDuplicatePath = "BUNDLE_DUPLICATE_PATH"
+	// BundleModeInvalid reports a file mode other than regular or executable.
+	BundleModeInvalid = "BUNDLE_MODE_INVALID"
+	// BundleDigestInvalid reports a file sha256 that is not lowercase hex of
+	// the expected length.
+	BundleDigestInvalid = "BUNDLE_DIGEST_INVALID"
+	// BundleSymlinkRejected reports that a symlink was found while walking a
+	// skill root. Defined here for the registry; it is returned only by the
+	// Phase 2 filesystem walker, not by this pure package, since pkg/core
+	// never touches the filesystem.
+	BundleSymlinkRejected = "BUNDLE_SYMLINK_REJECTED"
+)
+
 // All returns every registered code.
 func All() []string {
 	return []string{
@@ -71,5 +94,11 @@ func All() []string {
 		TransportInvalid,
 		ModeInvalid,
 		DigestInvalid,
+		BundleEmpty,
+		BundlePathInvalid,
+		BundleDuplicatePath,
+		BundleModeInvalid,
+		BundleDigestInvalid,
+		BundleSymlinkRejected,
 	}
 }
