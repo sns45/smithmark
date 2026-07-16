@@ -111,10 +111,10 @@ type toolsListResult struct {
 // tree, not just the immediate process: command commonly names a wrapper
 // (npx, uvx, go run) that forks the real server as its own child, and
 // killing only the wrapper would leave that real server running, orphaned.
-// While waiting for a given request's response it ignores any
-// server-initiated notification or response to a different id, reading line
-// by line since stdio messages are newline delimited and must not contain
-// embedded newlines. Each returned tool's InputSchemaDigest is computed by
+// While waiting for a given request's response it ignores any notification
+// the server raises on its own, or any response to a different id, reading
+// line by line since stdio messages are newline delimited and must not
+// contain embedded newlines. Each returned tool's InputSchemaDigest is computed by
 // the pure manifest.SchemaDigest helper, so canonicalization is never
 // duplicated between this package and pkg/core/manifest. The returned
 // transports slice is always exactly ["stdio"], since that is the only
@@ -164,6 +164,11 @@ func ExtractTools(ctx context.Context, command []string) ([]manifest.ToolDecl, [
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		// StdinPipe already handed back the write end. If we bail here, before
+		// Start, nothing else will ever close it (cmd.Wait, which normally
+		// closes StdinPipe's ends, never runs on an unstarted command), so
+		// close it explicitly to avoid leaking the underlying os.Pipe fd.
+		_ = stdin.Close()
 		return nil, nil, codes.E(codes.ToolExtractionFailed, "extract tools: creating stdout pipe: %v", err)
 	}
 	stderr := &boundedWriter{limit: stderrCaptureLimit}
@@ -286,8 +291,9 @@ func writeRPCMessage(w io.Writer, v any) error {
 }
 
 // readRPCResult reads newline delimited JSON-RPC messages from scanner until
-// it finds a response whose id equals wantID, ignoring any server-initiated
-// notification (no id) or response to a different id along the way. It
+// it finds a response whose id equals wantID, ignoring any notification the
+// server raises on its own (no id) or response to a different id along the
+// way. It
 // returns an error if the matching response carries a JSON-RPC error object,
 // if a line fails to parse, or if the stream ends before a match is found
 // (which is what happens once the subprocess is killed after a context

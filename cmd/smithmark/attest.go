@@ -2,14 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/sha512"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -24,11 +20,6 @@ import (
 // declFileName is the fixed declaration file attest reads from the artifact
 // root (U1). The positional path argument names the directory that holds it.
 const declFileName = "smithmark.yaml"
-
-// attestationBaseEnvVar is the environment variable consulted second in the
-// D3 base resolution order, after the --attestation-base flag and before the
-// package.json fallback.
-const attestationBaseEnvVar = "SMITHMARK_ATTESTATION_BASE"
 
 // toolExtractionTimeout bounds a live MCP tool extraction. ExtractTools
 // requires a context with a deadline (Task 2.3); this is the deadline attest
@@ -113,6 +104,19 @@ func runAttest(ctx context.Context, d *deps, root string, o *attestOptions) erro
 			return err
 		}
 		m.Dependencies = res.Ref
+		// When writing a bundle to a file, publish the raw SBOM as a sidecar
+		// next to it and point the manifest's dependencies locator at that
+		// file, before the manifest is validated and signed so the locator is
+		// covered by the signature. When pushing instead (no --output), the
+		// locator is left empty on purpose: SBOM publication and locator
+		// assignment land with M3 discovery or M6 release wiring (D2).
+		if o.output != "" {
+			sbomPath := o.output + ".sbom.json"
+			if err := os.WriteFile(sbomPath, res.BOM, 0o644); err != nil {
+				return fmt.Errorf("attest: writing SBOM to %s: %w", sbomPath, err)
+			}
+			m.Dependencies.Locator = filepath.Base(sbomPath)
+		}
 	}
 
 	// Stamp the injected clock and this build's generator identity, the two
@@ -121,8 +125,15 @@ func runAttest(ctx context.Context, d *deps, root string, o *attestOptions) erro
 	m.Generator = manifest.GeneratorInfo{Name: generatorName, Version: version}
 
 	if issues := m.Validate(); len(issues) > 0 {
-		first := issues[0]
-		return codes.E(first.Code, "attest: completed manifest is invalid at %s: %s", first.Path, first.Detail)
+		// Aggregate every issue into the detail as "code at path", joined by
+		// semicolons, so a maker sees all of them at once rather than fixing
+		// one, rerunning, and hitting the next. The error code is the first
+		// issue's code; Validate's stable sort makes "first" deterministic.
+		parts := make([]string, len(issues))
+		for i, is := range issues {
+			parts[i] = fmt.Sprintf("%s at %s", is.Code, is.Path)
+		}
+		return codes.E(issues[0].Code, "attest: completed manifest is invalid: %s", strings.Join(parts, "; "))
 	}
 
 	ref := manifest.ArtifactRef{
@@ -237,44 +248,23 @@ func completeMCPSurface(ctx context.Context, root string, decl *discover.Declara
 	m.MCP.Resources = []string{}
 	m.MCP.Prompts = []string{}
 
-	return resolveTarballDigest(root, o.tarball)
-}
-
-// resolveTarballDigest digests the npm tarball that identifies an mcp-server
-// subject. An explicit --tarball path wins; otherwise attest autodetects
-// exactly one *.tgz in the artifact root. Zero or several is ambiguous and
-// fails closed with ATTEST_SUBJECT_UNRESOLVED rather than guessing which
-// tarball to attest. The digest is sha512 (U6), the algorithm npm's own
-// integrity string uses.
-func resolveTarballDigest(root, explicit string) (manifest.DigestSet, error) {
-	tarball := explicit
-	if tarball == "" {
-		matches, err := filepath.Glob(filepath.Join(root, "*.tgz"))
-		if err != nil {
-			return nil, fmt.Errorf("attest: scanning %s for a tarball: %w", root, err)
-		}
-		switch len(matches) {
-		case 1:
-			tarball = matches[0]
-		case 0:
-			return nil, codes.E(codes.AttestSubjectUnresolved,
-				"attest: no *.tgz tarball found in %s; pass --tarball to name the subject", root)
-		default:
-			return nil, codes.E(codes.AttestSubjectUnresolved,
-				"attest: found %d *.tgz tarballs in %s; pass --tarball to select the subject", len(matches), root)
-		}
-	}
-
-	f, err := os.Open(tarball)
+	_, digest, tarName, tarVersion, err := discover.TarballDigest(root, o.tarball)
 	if err != nil {
-		return nil, fmt.Errorf("attest: opening tarball %s: %w", tarball, err)
+		return nil, err
 	}
-	defer f.Close()
-	h := sha512.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return nil, fmt.Errorf("attest: hashing tarball %s: %w", tarball, err)
+	// Cross check the tarball's own package.json identity against the
+	// declaration: the two must name the same artifact (U4, D6). The
+	// declaration is the authority, so a disagreement is a subject mismatch
+	// naming both sides.
+	if tarName != m.Artifact.Name {
+		return nil, codes.E(codes.StatementSubjectMismatch,
+			"attest: tarball package.json name %q does not match declared name %q", tarName, m.Artifact.Name)
 	}
-	return manifest.DigestSet{"sha512": hex.EncodeToString(h.Sum(nil))}, nil
+	if tarVersion != m.Artifact.Version {
+		return nil, codes.E(codes.StatementSubjectMismatch,
+			"attest: tarball package.json version %q does not match declared version %q", tarVersion, m.Artifact.Version)
+	}
+	return digest, nil
 }
 
 // pushAttestation resolves the deterministic attestation ref for ref, opens a
@@ -282,7 +272,7 @@ func resolveTarballDigest(root, explicit string) (manifest.DigestSet, error) {
 // 2.7). The base registry is resolved from the flag, the environment, or the
 // artifact's package.json in that order (D3).
 func pushAttestation(ctx context.Context, d *deps, root string, ref manifest.ArtifactRef, o *attestOptions, signed *compose.SignedBundle) error {
-	base, err := resolveAttestationBase(root, o.attestationBase)
+	base, err := discover.ResolveAttestationBase(o.attestationBase, root)
 	if err != nil {
 		return err
 	}
@@ -300,53 +290,4 @@ func pushAttestation(ctx context.Context, d *deps, root string, ref manifest.Art
 	}
 	fmt.Fprintf(d.Stdout, "pushed attestation to %s:%s (%s)\n", repo, tag, digest)
 	return nil
-}
-
-// resolveAttestationBase applies the D3 base resolution order: the
-// --attestation-base flag, then the SMITHMARK_ATTESTATION_BASE environment
-// variable, then a smithmark.attestationBase key in the artifact's
-// package.json, else ATTESTATION_BASE_UNKNOWN.
-func resolveAttestationBase(root, flag string) (string, error) {
-	if flag != "" {
-		return flag, nil
-	}
-	if env := os.Getenv(attestationBaseEnvVar); env != "" {
-		return env, nil
-	}
-	base, ok, err := attestationBaseFromPackageJSON(root)
-	if err != nil {
-		return "", err
-	}
-	if ok {
-		return base, nil
-	}
-	return "", codes.E(codes.AttestationBaseUnknown,
-		"attest: no attestation base; set --attestation-base, %s, or a smithmark.attestationBase key in package.json", attestationBaseEnvVar)
-}
-
-// attestationBaseFromPackageJSON reads the smithmark.attestationBase discovery
-// key from the artifact's package.json (D3). A missing package.json, or one
-// without the key, is not an error here: it simply means this resolution step
-// did not supply a base. package.json carries only this discovery metadata,
-// never capability declarations (U1).
-func attestationBaseFromPackageJSON(root string) (string, bool, error) {
-	data, err := os.ReadFile(filepath.Join(root, "package.json"))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("attest: reading package.json: %w", err)
-	}
-	var pkg struct {
-		Smithmark struct {
-			AttestationBase string `json:"attestationBase"`
-		} `json:"smithmark"`
-	}
-	if err := json.Unmarshal(data, &pkg); err != nil {
-		return "", false, fmt.Errorf("attest: parsing package.json: %w", err)
-	}
-	if pkg.Smithmark.AttestationBase == "" {
-		return "", false, nil
-	}
-	return pkg.Smithmark.AttestationBase, true, nil
 }

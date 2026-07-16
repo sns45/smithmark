@@ -134,19 +134,19 @@ type fileKeypair struct {
 func newFileKeypair(path string) (*fileKeypair, error) {
 	pemBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading signing key %s: %w", path, err)
+		return nil, codes.E(codes.SigningConfigInvalid, "reading signing key %s: %v", path, err)
 	}
 	priv, err := cryptoutils.UnmarshalPEMToPrivateKey(pemBytes, cryptoutils.SkipPassword)
 	if err != nil {
-		return nil, fmt.Errorf("parsing signing key %s: %w", path, err)
+		return nil, codes.E(codes.SigningConfigInvalid, "parsing signing key %s: %v", path, err)
 	}
 	signer, ok := priv.(crypto.Signer)
 	if !ok {
-		return nil, fmt.Errorf("signing key %s does not implement crypto.Signer", path)
+		return nil, codes.E(codes.SigningConfigInvalid, "signing key %s does not implement crypto.Signer", path)
 	}
 	algDetails, err := sigsig.GetDefaultAlgorithmDetails(signer.Public())
 	if err != nil {
-		return nil, fmt.Errorf("unsupported signing key in %s: %w", path, err)
+		return nil, codes.E(codes.SigningConfigInvalid, "unsupported signing key in %s: %v", path, err)
 	}
 	hint, err := keyHint(signer.Public())
 	if err != nil {

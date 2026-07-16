@@ -1,11 +1,14 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	"oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content/memory"
 
 	"github.com/sns45/smithmark/internal/golden"
 	"github.com/sns45/smithmark/pkg/compose"
@@ -129,6 +133,125 @@ func TestAttestDryRunGolden(t *testing.T) {
 	golden.Assert(t, stdout.Bytes(), filepath.Join("testdata", "attest_dryrun_hello_skill.golden.json"))
 }
 
+// TestAttestOutputWritesSBOMSidecar proves that in --output mode attest writes
+// the raw SBOM as an <output>.sbom.json sidecar and points the signed
+// statement's dependencies locator at that filename, whereas the push path
+// leaves the locator empty.
+func TestAttestOutputWritesSBOMSidecar(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "bundle.json")
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	if code := runMain(d, []string{"attest", "--output", out, skillFixturePath}); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	// Both files exist: the signed bundle and its SBOM sidecar.
+	bundleBytes, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading bundle: %v", err)
+	}
+	sbomBytes, err := os.ReadFile(out + ".sbom.json")
+	if err != nil {
+		t.Fatalf("reading SBOM sidecar: %v", err)
+	}
+	if !bytes.Equal(sbomBytes, goldenSBOMResult().BOM) {
+		t.Errorf("sidecar bytes = %q, want the raw BOM %q", sbomBytes, goldenSBOMResult().BOM)
+	}
+
+	// The statement inside the signed bundle carries the sidecar filename as
+	// its dependencies locator.
+	stmt := statementFromFakeBundle(t, bundleBytes)
+	if stmt.Predicate.Dependencies == nil {
+		t.Fatal("dependencies block missing from the signed statement")
+	}
+	if got, want := stmt.Predicate.Dependencies.Locator, "bundle.json.sbom.json"; got != want {
+		t.Errorf("locator = %q, want %q", got, want)
+	}
+}
+
+// statementFromFakeBundle extracts the in-toto statement out of a bundle
+// produced by fakeSigner: the DSSE payload is base64 of the canonical
+// statement bytes.
+func statementFromFakeBundle(t *testing.T, bundleBytes []byte) *manifest.Statement {
+	t.Helper()
+	var outer struct {
+		DSSEEnvelope struct {
+			Payload string `json:"payload"`
+		} `json:"dsseEnvelope"`
+	}
+	if err := json.Unmarshal(bundleBytes, &outer); err != nil {
+		t.Fatalf("bundle is not JSON: %v", err)
+	}
+	payload, err := base64.StdEncoding.DecodeString(outer.DSSEEnvelope.Payload)
+	if err != nil {
+		t.Fatalf("payload not base64: %v", err)
+	}
+	stmt, err := manifest.ParseStatement(payload)
+	if err != nil {
+		t.Fatalf("ParseStatement on bundle payload: %v", err)
+	}
+	return stmt
+}
+
+// TestAttestDryRunIdempotent proves the dry run is deterministic: two runs
+// with identical deps produce byte identical stdout, the property the golden
+// snapshot rests on.
+func TestAttestDryRunIdempotent(t *testing.T) {
+	run := func() []byte {
+		var stdout, stderr bytes.Buffer
+		d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+		if code := runMain(d, []string{"attest", "--dry-run", skillFixturePath}); code != 0 {
+			t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+		}
+		return append([]byte(nil), stdout.Bytes()...)
+	}
+	first, second := run(), run()
+	if !bytes.Equal(first, second) {
+		t.Errorf("dry run is not byte identical across two runs\n first: %s\nsecond: %s", first, second)
+	}
+}
+
+// TestAttestPushTerminus exercises the publish terminus with no --dry-run and
+// no --output: a memory store injected through NewTarget receives the signed
+// bundle, and the deterministic attestation tag resolves in that store
+// afterward.
+func TestAttestPushTerminus(t *testing.T) {
+	// The hello-skill fixture's pinned bundle digest, guarded by the walker's
+	// own golden test; the push tag is derived from it.
+	const bundleHex = "a4bdaaa7fd43eeca9269a369f0be3c87a9dedc8e052872064ad19ed26e27edda"
+	store := memory.New()
+	var stdout, stderr bytes.Buffer
+	d := &deps{
+		SBOM:      fakeSBOM{result: goldenSBOMResult()},
+		Signer:    fakeSigner{},
+		NewTarget: func(_ context.Context, _ string) (oras.Target, error) { return store, nil },
+		Now:       func() time.Time { return fixedNow },
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+	}
+
+	code := runMain(d, []string{"attest", "--attestation-base", "registry.example.com/attest", skillFixturePath})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	ref := manifest.ArtifactRef{
+		Kind:   manifest.KindSkill,
+		Name:   "hello-skill",
+		Source: manifest.SourceLocal,
+		Digest: manifest.DigestSet{"smithmark-bundle-v1": bundleHex},
+	}
+	_, tag, err := discover.AttestationRef("registry.example.com/attest", ref)
+	if err != nil {
+		t.Fatalf("AttestationRef: %v", err)
+	}
+	if _, err := store.Resolve(context.Background(), tag); err != nil {
+		t.Errorf("pushed tag %q does not resolve in the store: %v", tag, err)
+	}
+}
+
 // TestAttestSkipSBOMNoDependencies proves --skip-sbom omits the dependencies
 // block entirely and never calls the SBOM generator: the injected fake would
 // error if it ran.
@@ -204,7 +327,7 @@ capabilities:
   secrets: []
 `)
 	writeTestFile(t, dir, "tools.json", `{"tools":[{"name":"place_call","description":"place a call","inputSchema":{"type":"object","properties":{"to":{"type":"string"}}}}]}`)
-	writeTestFile(t, dir, "fake-caller-1.0.0.tgz", "pretend npm tarball bytes")
+	writeNPMTarball(t, dir, "fake-caller-1.0.0.tgz", "fake-caller", "1.0.0")
 
 	var stdout, stderr bytes.Buffer
 	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
@@ -269,10 +392,126 @@ capabilities:
 	}
 }
 
+// mcpDeclFixture is the minimal fake-caller mcp-server declaration the tarball
+// identity cases reuse, matching name fake-caller and version 1.0.0.
+const mcpDeclFixture = `kind: mcp-server
+name: fake-caller
+version: 1.0.0
+source: npm
+mcp:
+  transports: [stdio]
+capabilities:
+  networkEgress: []
+  filesystem: []
+  exec: []
+  env: []
+  secrets: []
+`
+
+// TestAttestMCPTarballIdentityMismatch proves the tarball's own package.json
+// identity is cross checked against the declaration: a tarball naming a
+// different package fails closed with STATEMENT_SUBJECT_MISMATCH rather than
+// attesting the declaration over the wrong subject.
+func TestAttestMCPTarballIdentityMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, mcpDeclFixture)
+	writeTestFile(t, dir, "tools.json", `{"tools":[]}`)
+	writeNPMTarball(t, dir, "fake-caller-1.0.0.tgz", "some-other-package", "1.0.0")
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.StatementSubjectMismatch {
+		t.Errorf("code = %q, want %q", line.Code, codes.StatementSubjectMismatch)
+	}
+	for _, want := range []string{"some-other-package", "fake-caller"} {
+		if !strings.Contains(line.Detail, want) {
+			t.Errorf("detail %q must name both sides of the mismatch (%s)", line.Detail, want)
+		}
+	}
+}
+
+// TestAttestMCPTarballMissingPackageJSON proves a tarball with no readable
+// package/package.json is treated as not an npm package tarball at all and
+// fails closed with ATTEST_SUBJECT_UNRESOLVED.
+func TestAttestMCPTarballMissingPackageJSON(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, mcpDeclFixture)
+	writeTestFile(t, dir, "tools.json", `{"tools":[]}`)
+
+	// A valid gzip tar that carries a file other than package/package.json.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	body := "not a package manifest"
+	if err := tw.WriteHeader(&tar.Header{Name: "package/README.md", Mode: 0o644, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fake-caller-1.0.0.tgz"), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	if line := decodeErrLine(t, stderr.Bytes()); line.Code != codes.AttestSubjectUnresolved {
+		t.Errorf("code = %q, want %q", line.Code, codes.AttestSubjectUnresolved)
+	}
+}
+
 // writeTestFile writes name under dir with content, failing the test on error.
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeNPMTarball writes a minimal valid gzipped tar under dir, shaped like an
+// npm pack output: a single package/package.json entry carrying the given name
+// and version. This is exactly what the attest mcp path digests and cross
+// checks the declaration against.
+func writeNPMTarball(t *testing.T, dir, filename, pkgName, pkgVersion string) {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	body := fmt.Sprintf(`{"name":%q,"version":%q,"description":"fixture"}`, pkgName, pkgVersion)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "package/package.json",
+		Mode: 0o644,
+		Size: int64(len(body)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, filename), buf.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -409,6 +648,79 @@ func TestManifestInitRefusesOverwrite(t *testing.T) {
 	}
 	if _, err := discover.LoadDeclared(out); err != nil {
 		t.Errorf("forced init did not write a loadable declaration: %v", err)
+	}
+}
+
+// TestAttestAggregatesValidationIssues proves that when the completed
+// manifest trips more than one Validate issue, the error detail lists every
+// issue as code at path joined by semicolons, while the error code is the
+// first issue's code under Validate's stable sort. The declaration below loads
+// cleanly (the loader does not grammar check capability values) but fails
+// Validate on both a malformed egress host and a malformed env name.
+func TestAttestAggregatesValidationIssues(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, `kind: skill
+name: hello
+source: local
+skill:
+  invokesTools: []
+capabilities:
+  networkEgress:
+    - host: BAD
+  filesystem: []
+  exec: []
+  env:
+    - lower
+  secrets: []
+`)
+	writeTestFile(t, dir, "SKILL.md", "---\nname: hello\n---\nbody\n")
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{err: errors.New("SBOM must not run under --skip-sbom")})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--skip-sbom", dir})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	// EGRESS_HOST_INVALID sorts before ENV_NAME_INVALID, so it is the code.
+	if line.Code != codes.EgressHostInvalid {
+		t.Errorf("code = %q, want %q (first issue under the stable sort)", line.Code, codes.EgressHostInvalid)
+	}
+	for _, want := range []string{codes.EgressHostInvalid, codes.EnvNameInvalid} {
+		if !strings.Contains(line.Detail, want) {
+			t.Errorf("detail %q does not list %s; every issue must be aggregated", line.Detail, want)
+		}
+	}
+}
+
+// TestParseEgress pins the host[:port] split, including the IPv6 cases the
+// naive last colon split gets wrong: a bare IPv6 literal has many colons and
+// must be preserved whole, while a bracketed literal carries its port after
+// the closing bracket.
+func TestParseEgress(t *testing.T) {
+	cases := []struct {
+		in        string
+		wantHost  string
+		wantPorts []int
+	}{
+		{"example.com:443", "example.com", []int{443}},
+		{"example.com", "example.com", nil},
+		{"::1", "::1", nil},
+		{"fe80::1", "fe80::1", nil},
+		{"[::1]:443", "::1", []int{443}},
+		{"[fe80::1]", "fe80::1", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			host, ports := parseEgress(tc.in)
+			if host != tc.wantHost {
+				t.Errorf("host = %q, want %q", host, tc.wantHost)
+			}
+			if !reflect.DeepEqual(ports, tc.wantPorts) {
+				t.Errorf("ports = %v, want %v", ports, tc.wantPorts)
+			}
+		})
 	}
 }
 

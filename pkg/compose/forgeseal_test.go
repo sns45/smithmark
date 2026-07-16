@@ -2,7 +2,6 @@ package compose
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -100,20 +99,6 @@ func installFakeForgeseal(t *testing.T, versionOutput, bomBody string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func wantCodedError(t *testing.T, err error, want string) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("err = nil, want a *codes.Error carrying %s", want)
-	}
-	var cerr *codes.Error
-	if !errors.As(err, &cerr) {
-		t.Fatalf("err = %v, want a *codes.Error carrying %s", err, want)
-	}
-	if cerr.Code != want {
-		t.Fatalf("code = %s, want %s (err: %v)", cerr.Code, want, err)
-	}
-}
-
 func TestGenerateHappyPath(t *testing.T) {
 	installFakeForgeseal(t, "forgeseal v0.3.0\n  commit: abc1234\n  built: 2024-01-01T00:00:00Z\n", cannedBOM)
 
@@ -151,14 +136,14 @@ func TestGenerateRejectsOldVersion(t *testing.T) {
 	installFakeForgeseal(t, "forgeseal v0.0.1\n  commit: abc1234\n  built: 2024-01-01T00:00:00Z\n", cannedBOM)
 
 	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
-	wantCodedError(t, err, codes.SBOMForgesealVersionUnsupported)
+	assertCode(t, err, codes.SBOMForgesealVersionUnsupported)
 }
 
 func TestGenerateRejectsUnparseableVersion(t *testing.T) {
 	installFakeForgeseal(t, "forgeseal notaversion\n", cannedBOM)
 
 	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
-	wantCodedError(t, err, codes.SBOMForgesealVersionUnsupported)
+	assertCode(t, err, codes.SBOMForgesealVersionUnsupported)
 	if !strings.Contains(err.Error(), "notaversion") {
 		t.Errorf("err = %v, want the raw unparseable version string in the detail", err)
 	}
@@ -168,7 +153,7 @@ func TestGenerateRejectsMalformedBOM(t *testing.T) {
 	installFakeForgeseal(t, "forgeseal v0.3.0\n  commit: abc1234\n  built: 2024-01-01T00:00:00Z\n", malformedBOM)
 
 	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
-	wantCodedError(t, err, codes.SBOMForgesealOutputInvalid)
+	assertCode(t, err, codes.SBOMForgesealOutputInvalid)
 }
 
 // TestGenerateRejectsEmptyBOMDocument proves a syntactically valid but
@@ -180,7 +165,7 @@ func TestGenerateRejectsEmptyBOMDocument(t *testing.T) {
 	installFakeForgeseal(t, "forgeseal v0.3.0\n  commit: abc1234\n  built: 2024-01-01T00:00:00Z\n", emptyBOM)
 
 	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
-	wantCodedError(t, err, codes.SBOMForgesealOutputInvalid)
+	assertCode(t, err, codes.SBOMForgesealOutputInvalid)
 	if !strings.Contains(err.Error(), "bomFormat") {
 		t.Errorf("err = %v, want a detail naming the missing bomFormat field", err)
 	}
@@ -190,7 +175,7 @@ func TestGenerateMissingBinary(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	_, err := NewForgesealCLI().Generate(context.Background(), t.TempDir())
-	wantCodedError(t, err, codes.SBOMForgesealMissing)
+	assertCode(t, err, codes.SBOMForgesealMissing)
 }
 
 func TestParseSemver(t *testing.T) {
@@ -248,7 +233,7 @@ func TestCheckForgesealVersion(t *testing.T) {
 			}
 			continue
 		}
-		wantCodedError(t, err, tt.wantCode)
+		assertCode(t, err, tt.wantCode)
 	}
 }
 

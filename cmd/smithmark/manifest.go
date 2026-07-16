@@ -236,19 +236,38 @@ func buildInitDoc(o *initOptions) (*initDoc, error) {
 	return doc, nil
 }
 
-// parseEgress splits a host[:port] egress flag. A trailing :port is recognized
-// only when what follows the last colon is a valid port number, so a bare host
-// (or an IPv6 literal with no port) is preserved whole. Deeper grammar checks
-// belong to the loader and Validate, not to this scaffold.
+// parseEgress splits a host[:port] egress flag while leaving IPv6 literals
+// intact. A bracketed literal carries any port after the closing bracket
+// ([::1]:443 yields host ::1 port 443, with the brackets stripped from the
+// host). An unbracketed value treats the suffix after the last colon as a
+// port only when the part before that colon carries no other colon, so a bare
+// IPv6 literal such as fe80::1, which is all colons and no port, is preserved
+// whole. Deeper grammar checks belong to the loader and Validate, not to this
+// scaffold.
 func parseEgress(s string) (host string, ports []int) {
-	host = s
-	if i := strings.LastIndex(s, ":"); i >= 0 {
+	if strings.HasPrefix(s, "[") {
+		end := strings.Index(s, "]")
+		if end < 0 {
+			return s, nil // unbalanced bracket: leave it for Validate to reject
+		}
+		inner := s[1:end]
+		rest := s[end+1:]
+		if rest == "" {
+			return inner, nil
+		}
+		if strings.HasPrefix(rest, ":") {
+			if p, err := strconv.Atoi(rest[1:]); err == nil && p >= 1 && p <= 65535 {
+				return inner, []int{p}
+			}
+		}
+		return s, nil // bracketed but no clean trailing port: preserve whole
+	}
+	if i := strings.LastIndex(s, ":"); i >= 0 && !strings.Contains(s[:i], ":") {
 		if p, err := strconv.Atoi(s[i+1:]); err == nil && p >= 1 && p <= 65535 {
-			host = s[:i]
-			ports = []int{p}
+			return s[:i], []int{p}
 		}
 	}
-	return host, ports
+	return s, nil
 }
 
 // parseFS splits a path:access filesystem flag on its last colon, so a path

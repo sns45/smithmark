@@ -36,7 +36,7 @@ type SignOptions struct {
 
 // SignedBundle is the result of signing a statement: a serialized sigstore
 // bundle plus the media type that identifies its schema. Callers persist Bundle
-// verbatim and attach MediaType alongside it; neither is ever re-encoded.
+// verbatim and attach MediaType alongside it; neither is ever encoded again.
 type SignedBundle struct {
 	// Bundle is the sigstore bundle serialized as JSON (protojson of the
 	// sigstore-go protobuf bundle). It carries the DSSE envelope, the

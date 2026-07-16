@@ -24,8 +24,10 @@ import (
 )
 
 // declSchemaVersion is the predicate schema version stamped on every loaded
-// manifest. It must match the version pkg/core/manifest validates against.
-const declSchemaVersion = "1.0.0"
+// manifest. It references the single exported manifest.SchemaVersion constant
+// that Validate checks against, so the loader and the validator can never
+// drift onto two different literals.
+const declSchemaVersion = manifest.SchemaVersion
 
 // The yaml tagged structs below mirror smithmark.yaml (U1): artifact identity
 // at the top level, exactly one declared surface block matching the kind, and
@@ -277,16 +279,20 @@ type SkillInfo struct {
 // declaration in smithmark.yaml owns that key, never the walker), and the
 // identity read from SKILL.md's frontmatter.
 //
-// Mode rule: a file is ModeExecutable when its root relative, forward slash
-// path appears in declaredExecutables (the optional executables key of a
-// skill's smithmark.yaml, loaded separately by LoadDeclared and passed in
-// here), on any operating system, or, for a path the declaration does not
-// cover, when the file's unix executable bit is set on disk. Declaring
-// executables therefore makes the resulting bundle digest platform
-// independent: a maker lists a script once, and the digest is identical on
-// Linux, macOS, and Windows, none of which agree on what "the executable
-// bit" even means on the other two (Windows has none). The disk bit check
-// is only a fallback for a skill that has not declared its executables.
+// Mode rule: when declaredExecutables is non nil (the skill's smithmark.yaml
+// carries the executables key, loaded separately by LoadDeclared and passed
+// in here), that list is exhaustive. A file is ModeExecutable exactly when
+// its root relative, forward slash path appears in the list, and the on disk
+// unix executable bit is ignored entirely for every path, on every operating
+// system. This is precisely the condition under which the resulting bundle
+// digest is platform independent: a maker lists a script once, and the digest
+// is identical on Linux, macOS, and Windows, none of which agree on what "the
+// executable bit" even means on the other two (Windows has none). When
+// declaredExecutables is nil (no key was declared), the mode falls back to
+// the file's unix executable bit, which is always false on Windows. Any
+// declared path that matches no walked file is a codes.SkillScriptPathInvalid
+// error naming the path, so a separator or case typo in the executables list
+// fails loudly rather than silently doing nothing.
 //
 // WalkSkill rejects every symlink found anywhere under root, including root
 // itself, with a codes.BundleSymlinkRejected error naming the offending
@@ -301,10 +307,16 @@ type SkillInfo struct {
 // skill surface, sorted by path; SKILL.md's own sha256 becomes EntryDigest
 // instead of a Scripts entry.
 func WalkSkill(root string, declaredExecutables []string) ([]bundle.File, *manifest.SkillSurface, SkillInfo, error) {
+	// A nil declaredExecutables means the executables key was absent, which
+	// selects the unix disk bit fallback; a non nil slice (even empty) means
+	// the key was declared, which makes that list the exhaustive source of
+	// truth for executable mode.
+	declaredPresent := declaredExecutables != nil
 	declared := make(map[string]bool, len(declaredExecutables))
 	for _, p := range declaredExecutables {
 		declared[p] = true
 	}
+	matched := make(map[string]bool, len(declaredExecutables))
 
 	var files []bundle.File
 	var skillMD []byte
@@ -328,40 +340,60 @@ func WalkSkill(root string, declaredExecutables []string) ([]bundle.File, *manif
 		}
 		relSlash := filepath.ToSlash(rel)
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("walk skill %s: reading %s: %w", root, relSlash, err)
-		}
-		info, err := d.Info()
-		if err != nil {
-			return fmt.Errorf("walk skill %s: stat %s: %w", root, relSlash, err)
-		}
-
-		// Declared executables win outright and make the mode platform
-		// independent; the unix executable bit is only a fallback for a
-		// path the declaration does not cover (it is always false on
-		// Windows, which reports no such bit).
+		// Mode: when the executables key is present the declaration is
+		// exhaustive and the disk bit is ignored outright; when it is absent
+		// the unix executable bit is the fallback (always false on Windows).
 		mode := bundle.ModeRegular
-		switch {
-		case declared[relSlash]:
-			mode = bundle.ModeExecutable
-		case info.Mode()&0o111 != 0:
-			mode = bundle.ModeExecutable
+		if declaredPresent {
+			if declared[relSlash] {
+				mode = bundle.ModeExecutable
+				matched[relSlash] = true
+			}
+		} else {
+			info, err := d.Info()
+			if err != nil {
+				return fmt.Errorf("walk skill %s: stat %s: %w", root, relSlash, err)
+			}
+			if info.Mode()&0o111 != 0 {
+				mode = bundle.ModeExecutable
+			}
 		}
 
-		sum := sha256.Sum256(data)
-		hexSum := hex.EncodeToString(sum[:])
-		files = append(files, bundle.File{Path: relSlash, Mode: mode, SHA256: hexSum})
-
+		// SKILL.md is read fully once because its bytes feed frontmatter
+		// parsing; every other file is hashed by streaming its handle into
+		// sha256, so a large script is never held in memory just to digest it.
+		var hexSum string
 		if relSlash == "SKILL.md" {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("walk skill %s: reading %s: %w", root, relSlash, err)
+			}
+			sum := sha256.Sum256(data)
+			hexSum = hex.EncodeToString(sum[:])
 			skillMD = data
 			skillMDHex = hexSum
 			haveSkillMD = true
+		} else {
+			hexSum, err = hashFileStreaming(path)
+			if err != nil {
+				return fmt.Errorf("walk skill %s: reading %s: %w", root, relSlash, err)
+			}
 		}
+		files = append(files, bundle.File{Path: relSlash, Mode: mode, SHA256: hexSum})
 		return nil
 	})
 	if walkErr != nil {
 		return nil, nil, SkillInfo{}, walkErr
+	}
+	// A declared executable that matched no walked file is a typo in the
+	// executables list, surfaced loudly rather than silently ignored.
+	if declaredPresent {
+		for _, p := range declaredExecutables {
+			if !matched[p] {
+				return nil, nil, SkillInfo{}, codes.E(codes.SkillScriptPathInvalid,
+					"skill root %s: declared executable %q matches no file in the bundle", root, p)
+			}
+		}
 	}
 	if !haveSkillMD {
 		return nil, nil, SkillInfo{}, codes.E(codes.ManifestFieldRequired,
@@ -388,6 +420,23 @@ func WalkSkill(root string, declaredExecutables []string) ([]bundle.File, *manif
 	}
 
 	return files, surface, parseSkillFrontmatter(skillMD), nil
+}
+
+// hashFileStreaming returns the lowercase hex sha256 of the file at path,
+// computed by copying the open handle into the hasher rather than reading the
+// whole file into memory first. The digest is byte identical to hashing the
+// full contents, so the pinned fixture bundle vector is unaffected.
+func hashFileStreaming(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // frontmatterDelim is the line, ignoring surrounding whitespace, that opens

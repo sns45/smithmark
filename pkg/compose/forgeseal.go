@@ -69,10 +69,10 @@ type SBOMGenerator interface {
 }
 
 // forgesealCLI implements SBOMGenerator by shelling out to the forgeseal
-// binary found on PATH. It carries no state: every call to Generate
-// re-resolves the binary on PATH rather than caching a path from
-// construction time, so a PATH change between building the generator and
-// calling Generate is always honored. This is also what lets a test install
+// binary found on PATH. It carries no state: every call to Generate resolves
+// the binary on PATH afresh rather than caching a path from construction
+// time, so a PATH change between building the generator and calling Generate
+// is always honored. This is also what lets a test install
 // a fake binary after already holding a SBOMGenerator value.
 type forgesealCLI struct{}
 
@@ -162,6 +162,12 @@ func (forgesealCLI) Generate(ctx context.Context, projectDir string) (*SBOMResul
 // error, mirroring pkg/discover.ExtractTools's bounded stderr handling.
 func runForgeseal(ctx context.Context, path string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
+	prepareProcessGroup(cmd)
+	// Override CommandContext's default cancellation (plain Process.Kill,
+	// which reaches only the immediate process) so a context deadline tears
+	// down any grandchild forgeseal forked as well, mirroring the twin
+	// pattern in pkg/discover.ExtractTools.
+	cmd.Cancel = func() error { return killProcessTree(cmd) }
 	cmd.WaitDelay = forgesealWaitDelay
 	stderr := &boundedWriter{limit: stderrCaptureLimit}
 	cmd.Stderr = stderr

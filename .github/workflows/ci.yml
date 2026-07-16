@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: gofmt check
         if: matrix.os == 'ubuntu-latest'
@@ -28,6 +28,14 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+      # Static validation of the release config, so a broken .goreleaser.yaml is
+      # caught on every PR rather than only at tag time. Run via the ephemeral
+      # go run form Task 2.9 used, so no separate action install is needed;
+      # ubuntu only, since the check is platform independent.
+      - name: goreleaser check
+        if: matrix.os == 'ubuntu-latest'
+        run: go run github.com/goreleaser/goreleaser/v2@latest check
 
   # Proves the wasip1 carried constraint (spec 2.1): the signing layer's stub
   # compiles under GOOS=wasip1 and sigstore-go stays out of the wasip1
@@ -41,7 +49,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: wasip1 build check
         run: GOOS=wasip1 GOARCH=wasm go build ./pkg/...

@@ -22,6 +22,8 @@ Exec adapter in v0.1; library import later.
 
 Evidence: forgeseal exports no packages (all logic sits under `internal/`), so a library import is impossible today. `pkg/compose` shells out to `forgeseal sbom --dir <projectDir> --output <file>` (the upstream `--lockfile` flag exists but the adapter passes the project directory instead), strict parses the CycloneDX JSON with cyclonedx-go, and enforces a minimum forgeseal version via `forgeseal version`. A missing binary fails `attest` with a machine readable code; an explicit `--skip-sbom` produces a manifest with no dependencies block, and verify then reports informational `DEPENDENCY_SBOM_MISSING`. The adapter sits behind an interface so the future swap to a library import is contained to one file.
 
+Note: `attest --output` writes the raw SBOM as an `<output>.sbom.json` sidecar and stamps that filename as the manifest's dependencies locator before signing; the push path leaves the locator empty for now. SBOM publication and locator assignment for the push path land with M3 discovery or M6 release wiring.
+
 **Follow up**: file a gh issue on `sns45/forgeseal` requesting an exported `pkg/sbom` facade over `internal/sbom.Generator` plus lockfile detection. File it when the adapter lands in M2. Filed: https://github.com/sns45/forgeseal/issues/26
 
 ## D3: Deterministic OCI attestation ref scheme (spec §6, §13 Q3) — NORMATIVE, feeds the registry RFC
@@ -35,11 +37,13 @@ skill:  bundle-v1-<sha256 hex, 64 chars>.att                  tag
 oci:    native referrers API on the image digest; no mapping
 ```
 
-- **Name encoding**: npm `@scope/name` maps to `scope/name` (npm has no unscoped names containing `/`, so this is injective), lowercased; PyPI names normalized per PEP 503; skill names must match `[a-z0-9-]+` (taken from SKILL.md frontmatter). Any name that still fails the OCI path segment grammar is a hard error `REF_UNMAPPABLE`, overridable with `--ref`. Fail closed, never guess.
+- **Name encoding**: npm `@scope/name` maps to `scope/name` (npm has no unscoped names containing `/`, so this is injective), lowercased; PyPI names normalized per PEP 503; skill names must match `[a-z0-9-]+`, taken from the `smithmark.yaml` declaration, with SKILL.md frontmatter as a cross check when present. Any name that still fails the OCI path segment grammar is a hard error `REF_UNMAPPABLE`, overridable with `--ref`. Fail closed, never guess.
 - **Base resolution order**: `--attestation-base` flag, then `SMITHMARK_ATTESTATION_BASE` env, then a `smithmark.attestationBase` key in the artifact's own `package.json`, else error `ATTESTATION_BASE_UNKNOWN`.
 - **Version is not in the tag**: the digest is the identity; version lives in the attestation subject; version tags would be mutable and ambiguous.
 
 **Why safe**: tags are discovery only; trust always comes from verifying the full subject digest inside the DSSE envelope, so digest truncation and hostile bases both fail closed (worst case, discovery fetches an attestation that fails subject digest match). The `.att` suffix mirrors cosign's convention deliberately. The registry RFC's attestation reference field is what eventually retires the base resolution bootstrap; the RFC will say so explicitly.
+
+Amendment 2026-07-16: digest values must be exact length for the mapping (npm sha512 exactly 128 hex, pypi and skill digests exactly 64); wrong lengths are REF_UNMAPPABLE, never truncated or padded.
 
 ## D4: `verify --strict` semantics and exit codes (spec §5, §13 Q4) — exit codes are API
 

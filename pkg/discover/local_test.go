@@ -558,6 +558,66 @@ func TestWalkSkillDeclaredExecutableForcesModeWithoutDiskBit(t *testing.T) {
 	}
 }
 
+// When a skill declares its executables key, the list is exhaustive: a file
+// is executable exactly when the declaration names it, and the on disk unix
+// executable bit is ignored entirely for every path the declaration does not
+// cover. This is what makes the bundle digest identical across platforms. So
+// an undeclared file that happens to carry a disk executable bit must come
+// back ModeRegular, not ModeExecutable, whenever the key is present.
+func TestWalkSkillExhaustiveIgnoresUndeclaredDiskBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix executable bit to set on windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// declared.sh carries no disk bit yet is declared: it must be executable.
+	if err := os.WriteFile(filepath.Join(dir, "declared.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// undeclared.sh carries the disk bit but is not declared: with the key
+	// present the disk bit is ignored, so it must be regular.
+	if err := os.WriteFile(filepath.Join(dir, "undeclared.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files, _, _, err := discover.WalkSkill(dir, []string{"declared.sh"})
+	if err != nil {
+		t.Fatalf("WalkSkill: %v", err)
+	}
+	modes := map[string]bundle.Mode{}
+	for _, f := range files {
+		modes[f.Path] = f.Mode
+	}
+	if modes["declared.sh"] != bundle.ModeExecutable {
+		t.Errorf("declared.sh mode = %s, want %s", modes["declared.sh"], bundle.ModeExecutable)
+	}
+	if modes["undeclared.sh"] != bundle.ModeRegular {
+		t.Errorf("undeclared.sh mode = %s, want %s (disk bit must be ignored when the key is present)", modes["undeclared.sh"], bundle.ModeRegular)
+	}
+}
+
+// A declared executable path that matches no walked file is a loud error, not
+// a silent no-op: it catches separator and case typos in the smithmark.yaml
+// executables list.
+func TestWalkSkillDeclaredPathMatchesNothingErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := discover.WalkSkill(dir, []string{"scripts/absent.sh"})
+	var cerr *codes.Error
+	if !errors.As(err, &cerr) {
+		t.Fatalf("err = %v, want a *codes.Error carrying %s", err, codes.SkillScriptPathInvalid)
+	}
+	if cerr.Code != codes.SkillScriptPathInvalid {
+		t.Fatalf("code = %s, want %s (err: %v)", cerr.Code, codes.SkillScriptPathInvalid, err)
+	}
+	if !strings.Contains(cerr.Detail, "scripts/absent.sh") {
+		t.Errorf("error detail %q does not name the offending declared path", cerr.Detail)
+	}
+}
+
 // An undeclared file with the unix executable bit set falls back to
 // ModeExecutable; this fallback only makes sense on unix, since Windows has
 // no such bit to report.

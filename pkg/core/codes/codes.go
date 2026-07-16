@@ -93,7 +93,9 @@ const (
 	GeneratedAtInvalid = "GENERATED_AT_INVALID"
 	// ManifestFieldRequired reports a required identity string that is empty,
 	// such as artifact.name, a generator field, an mcp tool name, or a
-	// dependency SBOM field when the dependencies block is present.
+	// dependency SBOM field when the dependencies block is present. It is also
+	// raised by the skill walker when a bundle is missing its required
+	// SKILL.md entry file.
 	ManifestFieldRequired = "MANIFEST_FIELD_REQUIRED"
 	// SkillScriptPathInvalid reports a skill script path that is not a clean
 	// relative path with forward slashes, or a duplicate script path.
@@ -209,9 +211,10 @@ const (
 	// key.
 	AttestationBaseUnknown = "ATTESTATION_BASE_UNKNOWN"
 	// ToolExtractionFailed reports that extracting the MCP tool listing from
-	// a running stdio server failed: the process could not be started or
-	// exited unexpectedly, the protocol handshake did not match, or the
-	// context deadline was exceeded before tools/list returned.
+	// a running stdio server failed: the declaration carried no launch command
+	// to run, the process could not be started or exited unexpectedly, the
+	// protocol handshake did not match, or the context deadline was exceeded
+	// before tools/list returned.
 	ToolExtractionFailed = "TOOL_EXTRACTION_FAILED"
 	// SigningConfigInvalid reports that a signing request carried no usable
 	// signing configuration: neither a key path for key based signing nor the
@@ -221,7 +224,8 @@ const (
 	// sign but the caller told it nothing to sign with.
 	SigningConfigInvalid = "SIGNING_CONFIG_INVALID"
 	// PublishBundleInvalid reports that PushAttestation or AttachReferrer was
-	// given a nil signed bundle, or one carrying no bundle bytes, to push.
+	// given a nil signed bundle, one carrying no bundle bytes, or one carrying
+	// an empty MediaType, to push.
 	PublishBundleInvalid = "PUBLISH_BUNDLE_INVALID"
 	// PublishTagInvalid reports that a tag handed to PushAttestation does not
 	// match the OCI distribution spec tag grammar. pkg/discover.AttestationRef

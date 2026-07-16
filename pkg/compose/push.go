@@ -58,7 +58,7 @@ func validateBundle(bundle *SignedBundle) error {
 // layer. artifactType and the layer's mediaType are both bundle.MediaType,
 // read off the bundle rather than restated as a literal, so the manifest
 // always advertises whatever bundle schema version produced it (spec 6).
-// subject is nil for PushAttestation's tag based path and non-nil for
+// subject is nil for PushAttestation's tag based path and set for
 // AttachReferrer's referrer path; that is the only difference between the
 // two call sites, so both share this helper.
 func packBundle(ctx context.Context, pusher content.Pusher, subject *ocispec.Descriptor, bundle *SignedBundle) (ocispec.Descriptor, error) {
@@ -89,7 +89,7 @@ func packBundle(ctx context.Context, pusher content.Pusher, subject *ocispec.Des
 // repository, so there is nothing for repo to select at this layer. It stays
 // in the signature because the CLI (a later task) resolves a remote
 // repository client from repo before ever reaching this function, and
-// dropping the parameter now would only mean re-adding it then.
+// dropping the parameter now would only mean adding it back then.
 //
 // tag is validated against the OCI distribution spec tag grammar with
 // discover.ValidOCITag before any push is attempted, coded

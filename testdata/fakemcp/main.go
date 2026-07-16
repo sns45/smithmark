@@ -91,7 +91,8 @@ func main() {
 				// detector (this is the only goroutine) and exit almost
 				// immediately with "all goroutines are asleep - deadlock!",
 				// which would make the timeout test pass for the wrong
-				// reason; a long sleep is a real, non-deadlocking block.
+				// reason; a long sleep is a real block that never trips
+				// that detector.
 				time.Sleep(time.Hour)
 			}
 			resp := map[string]any{

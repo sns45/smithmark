@@ -218,7 +218,11 @@ type Issue struct {
 	Detail string `json:"detail"`
 }
 
-const schemaVersion1 = "1.0.0"
+// SchemaVersion is the single predicate schemaVersion this build understands
+// and stamps. Validate checks against it and the pkg/discover loader stamps
+// it onto every declared manifest, so both reference this one exported
+// constant rather than repeating the literal.
+const SchemaVersion = "1.0.0"
 
 // Validate checks a parsed manifest against the semantic rules of spec 3 and
 // decision D1, beyond what strict JSON parsing already enforces. The result
@@ -230,9 +234,9 @@ func (m *CapabilityManifest) Validate() []Issue {
 		issues = append(issues, Issue{Code: code, Path: path, Detail: detail})
 	}
 
-	if m.SchemaVersion != schemaVersion1 {
+	if m.SchemaVersion != SchemaVersion {
 		add(codes.ManifestSchemaVersionUnsupported, "schemaVersion",
-			fmt.Sprintf("schemaVersion must be %q, got %q", schemaVersion1, m.SchemaVersion))
+			fmt.Sprintf("schemaVersion must be %q, got %q", SchemaVersion, m.SchemaVersion))
 	}
 
 	switch m.Artifact.Kind {

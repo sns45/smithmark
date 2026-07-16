@@ -131,6 +131,29 @@ func TestNativeNoConfigFailsClosed(t *testing.T) {
 	}
 }
 
+// TestNativeBadKeyFailsCoded proves that key loading failures are coded
+// SIGNING_CONFIG_INVALID rather than surfaced as an uncoded error: an
+// unreadable path and an unparsable key file both fail closed with the code,
+// so the CLI's machine readable stderr contract carries it.
+func TestNativeBadKeyFailsCoded(t *testing.T) {
+	statement := []byte(`{"_type":"https://in-toto.io/Statement/v1","subject":[{"name":"x"}]}`)
+
+	t.Run("unreadable key path", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "does-not-exist.pem")
+		_, err := NewSigner().SignStatement(context.Background(), statement, SignOptions{KeyPath: missing})
+		assertCode(t, err, codes.SigningConfigInvalid)
+	})
+
+	t.Run("unparsable key file", func(t *testing.T) {
+		garbage := filepath.Join(t.TempDir(), "garbage.pem")
+		if err := os.WriteFile(garbage, []byte("not a pem key at all"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := NewSigner().SignStatement(context.Background(), statement, SignOptions{KeyPath: garbage})
+		assertCode(t, err, codes.SigningConfigInvalid)
+	})
+}
+
 // dsseEnvelopeFromBundle parses a serialized sigstore bundle and returns its
 // DSSE envelope, failing the test if the bundle is not a DSSE bundle.
 func dsseEnvelopeFromBundle(t *testing.T, raw []byte) *protodsse.Envelope {
