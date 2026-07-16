@@ -1,4 +1,4 @@
-# smithmark — Decisions (ADR lite)
+# smithmark: Decisions (ADR lite)
 
 Each entry records a decision resolved during the build. D1 to D6 resolve spec §13 Q1 to Q6; D7 records the M0 gate outcome; U entries cover items the spec left open. All spec references are to `requirements.md` in the repo root. All decisions below were approved by the maintainer on 2026-07-16.
 
@@ -13,6 +13,8 @@ Domain patterns and path patterns, with a `"*"` escape hatch.
 - **Secrets**: namespaced `kind:provider` strings (`oauth:google`, `api-key:twilio`).
 
 **Why**: assayward policy needs patterns, not booleans ("no egress except `api.company.com`"). The escape hatch keeps authoring honest when hosts are dynamic. Reasons stay optional so adoption is not taxed, but the scaffolder nudges for them because they make declarations reviewable (the TC54 story).
+
+Amendment 2026-07-16: filesystem path patterns reject dotdot segments and backslashes; the bundle path hygiene rule applies to declared paths as well.
 
 ## D2: forgeseal integration mode (spec §2.2, §13 Q2)
 
