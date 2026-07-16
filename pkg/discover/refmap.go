@@ -6,10 +6,11 @@ package discover
 // pkg/core, pkg/discover is not covered by the internal/arch import guard
 // (spec 2.1's automated check only scans ./pkg/core/...), so this header
 // comment is the enforcement mechanism here: keep this file's import list
-// exactly as narrow as it is today, and do not add "regexp", "fmt", or
-// anything with an I/O footprint without revisiting that guard first. The
-// grammar checks below are written as manual byte scans specifically so this
-// file never needs to import "regexp".
+// exactly as narrow as it is today, and do not add "regexp" or anything with
+// an I/O footprint without revisiting that guard first. "fmt" is allowed by
+// the same resolution; this file simply has not needed it. The grammar
+// checks below are written as manual byte scans specifically so this file
+// never needs to import "regexp".
 
 import (
 	"strings"
@@ -25,11 +26,16 @@ import (
 // the string a second time.
 var bundleDigestKey = strings.TrimSuffix(bundle.Prefix, ":")
 
-// minDigestHexLen is the minimum hex length a required digest value must
-// carry: a bare sha256 (skill, pypi) is exactly this long, and an npm sha512
-// hex value is twice this long, with only the first minDigestHexLen taken for
-// the tag (decision D3).
-const minDigestHexLen = 64
+// npmDigestHexLen is the exact hex length an npm artifact's sha512 digest
+// value must carry: 64 bytes encoded as hex is 128 characters. Only the
+// first sha256DigestHexLen of these characters go into the tag (decision D3).
+const npmDigestHexLen = 128
+
+// sha256DigestHexLen is the exact hex length a sha256 style digest value
+// must carry when the mapping uses it directly and in full: a skill bundle
+// digest and a pypi sha256 digest are both 32 bytes encoded as hex, 64
+// characters (decision D3).
+const sha256DigestHexLen = 64
 
 // npmSegment, pypiSegment, and skillSegment are the fixed ecosystem path
 // segments D3 places between base and the encoded name.
@@ -73,7 +79,7 @@ func AttestationRef(base string, ref manifest.ArtifactRef) (repo string, tag str
 			return "", "", codes.E(codes.RefUnmappable,
 				"skill name %q must match [a-z0-9-]+, no coercion is applied", ref.Name)
 		}
-		v, derr := requiredDigestHex(ref.Digest, bundleDigestKey)
+		v, derr := requiredDigestHex(ref.Digest, bundleDigestKey, sha256DigestHexLen)
 		if derr != nil {
 			return "", "", derr
 		}
@@ -83,15 +89,15 @@ func AttestationRef(base string, ref manifest.ArtifactRef) (repo string, tag str
 	} else {
 		switch ref.Source {
 		case manifest.SourceNPM:
-			v, derr := requiredDigestHex(ref.Digest, "sha512")
+			v, derr := requiredDigestHex(ref.Digest, "sha512", npmDigestHexLen)
 			if derr != nil {
 				return "", "", derr
 			}
 			ecosystem = npmSegment
 			encodedName = encodeNPMName(ref.Name)
-			tag = "sha512-" + v + ".att"
+			tag = "sha512-" + v[:sha256DigestHexLen] + ".att"
 		case manifest.SourcePyPI:
-			v, derr := requiredDigestHex(ref.Digest, "sha256")
+			v, derr := requiredDigestHex(ref.Digest, "sha256", sha256DigestHexLen)
 			if derr != nil {
 				return "", "", derr
 			}
@@ -145,18 +151,23 @@ func splitBase(base string) (host string, path []string, err error) {
 	return strings.ToLower(segs[0]), segs[1:], nil
 }
 
-// requiredDigestHex looks up key in ds and returns its first minDigestHexLen
-// hex characters. The manifest layer already validated every DigestSet value
-// as hex (decisions D6, U6); this function only checks presence and length,
-// since an npm sha512 hex value is 128 characters and the tag takes only the
-// first 64.
-func requiredDigestHex(ds manifest.DigestSet, key string) (string, error) {
-	v, ok := ds[key]
-	if !ok || len(v) < minDigestHexLen {
+// requiredDigestHex looks up key in ds and returns its value, requiring the
+// value to be exactly wantLen hex characters, naming the key and the
+// observed length otherwise. The manifest layer already validated every
+// DigestSet value as hex (decisions D6, U6); this function checks presence
+// and exact length only. Exactness matters because an npm sha512 hex value
+// is always 128 characters, of which only the first 64 go into the tag,
+// while a skill bundle digest and a pypi sha256 digest are always exactly 64
+// characters used in full; any other observed length signals a digest that
+// does not belong to the algorithm this mapping expects, so it is rejected
+// rather than silently truncated or padded.
+func requiredDigestHex(ds manifest.DigestSet, key string, wantLen int) (string, error) {
+	v := ds[key]
+	if len(v) != wantLen {
 		return "", codes.E(codes.RefUnmappable,
-			"digest key %q is absent or shorter than %d hex characters", key, minDigestHexLen)
+			"digest key %q must be exactly %d hex characters, got %d", key, wantLen, len(v))
 	}
-	return v[:minDigestHexLen], nil
+	return v, nil
 }
 
 // encodeNPMName maps npm @scope/name to scope/name (stripping the leading at

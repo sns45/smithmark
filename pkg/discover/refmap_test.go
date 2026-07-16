@@ -175,13 +175,35 @@ func TestAttestationRef(t *testing.T) {
 			wantCode: codes.RefUnmappable,
 		},
 		{
-			name: "npm digest value shorter than 64 hex chars",
+			name: "npm digest value not exactly 128 hex chars, too short",
 			base: testBase,
 			ref: manifest.ArtifactRef{
 				Kind:   manifest.KindMCPServer,
 				Name:   "better-call-claude",
 				Source: manifest.SourceNPM,
 				Digest: manifest.DigestSet{"sha512": strings.Repeat("aa", 31)}, // 62 chars
+			},
+			wantCode: codes.RefUnmappable,
+		},
+		{
+			name: "npm digest value of exactly 64 hex chars is rejected, not truncated",
+			base: testBase,
+			ref: manifest.ArtifactRef{
+				Kind:   manifest.KindMCPServer,
+				Name:   "better-call-claude",
+				Source: manifest.SourceNPM,
+				Digest: manifest.DigestSet{"sha512": strings.Repeat("aa", 32)}, // 64 chars, not 128
+			},
+			wantCode: codes.RefUnmappable,
+		},
+		{
+			name: "skill digest value of 128 hex chars is rejected, not truncated",
+			base: testBase,
+			ref: manifest.ArtifactRef{
+				Kind:   manifest.KindSkill,
+				Name:   "hello-skill",
+				Source: manifest.SourceLocal,
+				Digest: manifest.DigestSet{"smithmark-bundle-v1": strings.Repeat("d4", 64)}, // 128 chars, not 64
 			},
 			wantCode: codes.RefUnmappable,
 		},

@@ -185,8 +185,8 @@ const (
 )
 
 // Operational codes (spec 2.2, decisions D2 and D3). SigningUnavailablePlatform
-// above predates this registry; the codes in this block are reserved for
-// Phase 2 (M2) and Phase 3 (M3) work that has not landed yet.
+// above predates this registry; the codes in this block belong to Phase 2
+// (M2) and Phase 3 (M3) work, landing incrementally as each task ships.
 const (
 	// SBOMForgesealMissing reports that the forgeseal binary required to
 	// generate a dependency SBOM could not be found.
