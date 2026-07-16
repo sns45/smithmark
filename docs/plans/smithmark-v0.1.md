@@ -925,7 +925,7 @@ func ParseStatement(data []byte) (*Statement, error) // strict, verifies _type a
 
 - [ ] **Step 1: Write the failing tests**
 
-`statement_test.go`: build the `validManifest()` fixture plus a skill variant; assert (a) `NewStatement` rejects a ref whose kind or name disagrees with the predicate artifact block (expect error mentioning `MANIFEST_KIND_SURFACE_MISMATCH`), (b) npm subject name is `pkg:npm/better-call-claude@1.4.2` and a scoped fixture yields `pkg:npm/%40acme/tool@1.0.0`, (c) skill subject digest key is exactly `smithmark-bundle-v1`, (d) `ParseStatement` rejects unknown `_type`, unknown `predicateType`, and unknown fields, (e) `golden.Assert(t, canonicalBytes, "testdata/golden/statement_mcp.json")` and the skill twin. Fixed `GeneratedAt` of `2026-07-16T00:00:00Z` keeps goldens stable.
+`statement_test.go`: build the `validManifest()` fixture plus a skill variant; assert (a) `NewStatement` rejects a ref whose kind or name disagrees with the predicate artifact block (kind mismatch uses `MANIFEST_KIND_SURFACE_MISMATCH`; name, version, and source mismatches use `STATEMENT_SUBJECT_MISMATCH`, minted at the M1 review and ratified at the M1 gate), (b) npm subject name is `pkg:npm/better-call-claude@1.4.2` and a scoped fixture yields `pkg:npm/%40acme/tool@1.0.0`, (c) skill subject digest key is exactly `smithmark-bundle-v1`, (d) `ParseStatement` rejects unknown `_type`, unknown `predicateType`, and unknown fields, (e) `golden.Assert(t, canonicalBytes, "testdata/golden/statement_mcp.json")` and the skill twin. Fixed `GeneratedAt` of `2026-07-16T00:00:00Z` keeps goldens stable.
 
 - [ ] **Step 2: RED** — `go test ./pkg/core/manifest/` fails: `NewStatement` undefined.
 
