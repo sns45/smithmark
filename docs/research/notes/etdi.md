@@ -1,4 +1,4 @@
-# ETDI — Enhanced Tool Definition Interface (arXiv 2506.01333)
+# ETDI: Enhanced Tool Definition Interface (arXiv 2506.01333)
 
 ## What it is
 A security extension to MCP proposed in an academic paper, "ETDI: Mitigating Tool Squatting and Rug Pull Attacks in Model Context Protocol (MCP) by using OAuth-Enhanced Tool Definitions and Policy-Based Access Control," by Manish Bhatt, Vineeth Sai Narajala, and Idan Habler, submitted 2025-06-02. ETDI adds cryptographic identity, immutable versioned tool definitions, and OAuth 2.0 scoped permissions to MCP tools, and proposes a policy engine that evaluates tool calls against explicit policies. This is the closest known neighbor and is treated here with extra rigor.

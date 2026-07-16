@@ -2,7 +2,7 @@
 
 Access date for all sources: 2026-07-16. Evidence base: the fourteen adversarial note files in `docs/research/notes/` (Task 0.1), each of which records primary source citations with access dates and the strongest refutation sentence its subject offers. This document synthesizes those notes into the landscape table, the verdict on the novelty claim, and reusable positioning language. It is the go or no go input for the M0 gate.
 
-Claim under test, quoted verbatim from `requirements.md` §1.2:
+Claim under test, quoted verbatim from `requirements.md` §1.2 as it stood at the M0 gate (commit dd781d3); the gate adopted the narrowed replacement in section 2c, which the spec now carries:
 
 > smithmark is the first attestation framework that treats **capability declarations as signed, policy-consumable artifacts** for MCP servers and skills — composing npm provenance, Sigstore, SLSA, and CycloneDX rather than replacing them, and closing the loop from publication (maker's mark) to admission (assayward policy).
 
@@ -62,7 +62,7 @@ Yes. Three items, each covering a slice of the claim, and each predating smithma
 
 **ETDI (arXiv 2506.01333, submitted 2025-06-02).** The nearest paper level neighbor, and the one the requirements document itself flagged. ETDI binds MCP tool definitions to signed JWTs, makes versions immutable, and proposes a policy engine that evaluates declared permissions: "A tool's required capabilities (e.g., OAuth scopes) are declared in its signed definition." Its limits, from its own paper and repositories: capability means OAuth scope, not the resource surface (egress, filesystem, exec, env, secrets) smithmark declares; verification happens client side at tool discovery, not as a published artifact gated at admission; there is no composition of npm provenance, Sigstore, SLSA, or CycloneDX (the paper cites Sigstore literature without integrating it); no skills coverage; and the reference implementation survives only as a fork, with upstream PR #845 to modelcontextprotocol/python-sdk closed unmerged on 2025-07-18 and redirected to a specification first process (`notes/etdi.md`).
 
-Everything else in the table either does not sign (mcp-scan, MCP Registry, SkillGuard, agent-manifest, CycloneDX issue #895), signs something other than a capability declaration (npm provenance, ToolHive, Docker MCP Catalog, NVIDIA, the TEE server, the runtime manifest paper), or both.
+Everything else in the table either signs nothing itself (mcp-scan, MCP Registry, SkillGuard, agent-manifest, CycloneDX issue #895, ToolHive) or signs something other than a capability declaration (npm provenance, Docker MCP Catalog, NVIDIA, the TEE server, the runtime manifest paper).
 
 ### (b) Does the claim survive as written, survive with narrowing, or fail?
 
@@ -103,5 +103,5 @@ The paragraphs below are written for reuse in `proposals/` and the README. Each 
 - **The §1.4 standards venue is already contested.** CycloneDX issue #895 asked in March 2026 for an Agent BOM covering "what is it authorised to do"; it was closed as duplicate and defines no taxonomy, so the specific agent capability taxonomy slot at TC54 remains open, but smithmark should assume company in that venue and move promptly (`notes/cyclonedx-agent-bom.md`).
 - **The registry RFC gap is confirmed.** server.json has no attestation reference field today; `fileSha256` for MCPB bundles is the only integrity metadata. The §1.4 MCP Registry provenance RFC targets a real, verified gap (`notes/mcp-registry.md`).
 - **§1.3 references should say Snyk Agent Scan.** The mcp-scan comparison in the requirements now points at a Snyk branded product (verified against the repository README on 2026-07-16), which also signals that the scanning side of this space is consolidating under large vendors.
-- **Watch item: Ken Huang's "Agent Skill Trust & Signing Service" essay.** Seen during the 0.1 discovery sweep as a design essay proposing a skill signing service, judged not a shipped competitor and not fetched in full (Task 0.1 report, section 5). Directionally similar to smithmark's skills side; worth a full read before the M6 proposals ship.
+- **Watch item: Ken Huang's "Agent Skill Trust & Signing Service" essay.** Seen during the 0.1 discovery sweep as a design essay proposing a skill signing service, judged not a shipped competitor and not fetched in full (seen during the 0.1 discovery sweep; deliberately not fetched in full). Directionally similar to smithmark's skills side; worth a full read before the M6 proposals ship.
 - **Watch item: Enclawed's trajectory.** It is the nearest implemented neighbor. If it adds MCP server coverage or adopts a portable attestation format, the narrowed claim's first conjunct erodes; the composition and external policy loop conjuncts would remain.

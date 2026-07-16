@@ -1,4 +1,4 @@
-# NVIDIA-Verified Agent Skills
+# NVIDIA Verified Agent Skills
 
 ## What it is
 An NVIDIA program and catalog that reviews, scans, cryptographically signs, and documents agent skills that teach AI agents to use NVIDIA tools and libraries. It builds on the open `agentskills.io` specification and ships machine readable skill cards. It is a curated publishing pipeline plus a signing step, not an open framework for arbitrary artifacts.

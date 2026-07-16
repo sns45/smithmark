@@ -1,4 +1,4 @@
-# SkillGuard — A Permission Framework for Agent Skills (arXiv 2606.03024)
+# SkillGuard: A Permission Framework for Agent Skills (arXiv 2606.03024)
 
 ## What it is
 An academic paper by Shidong Pan, Xiaoyu Sun, Tianyi Zhang, Dianshu Liao, Kaiwen Yang, and Zhenchang Xing (CSIRO Data61), arXiv:2606.03024v2 dated 2026-07-13. SkillGuard is a runtime permission framework: each skill declares its capability surface through a JSON based Skill Manifest expressed in a domain specific language, and the framework instantiates those declared permissions into runtime policy state and mediates sensitive behavior during execution.

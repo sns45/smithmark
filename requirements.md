@@ -6,7 +6,7 @@
 
 > **Naming status:** Cleared npm, crates.io, PyPI, Homebrew core, and GitHub (2026-07 sweep; 5 ambient GitHub matches, none software claimants). **Remaining manual gates before first public commit:** USPTO (Smithmark Publishers — defunct book imprint, likely Class 16 vs. our 9/42, verify no live registration), third-party Homebrew taps, domain if wanted. No logic depends on the name. Fallbacks in priority order: `touchmark`, `provenmark`, `tangmark`.
 
-> **Whitespace status:** Sweep completed 2026-07-16 (M0; evidence and verdict in `docs/research/whitespace-sweep.md`, 14 swept items). The original blanket claim was falsified by named prior art (Enclawed for skills; `studiomeyer-io/mcp-server-attestation` and ETDI for MCP servers); §1.2 below now carries the narrowed composition claim adopted at the M0 gate. Watch items on record: Enclawed's trajectory, and Ken Huang's skill signing essay to be read in full before the M6 proposals ship.
+> **Whitespace status:** Sweep completed 2026-07-16 (M0; evidence and verdict in `docs/research/whitespace-sweep.md`, 14 swept items). The original blanket claim was falsified by named prior art (Enclawed for skills; `studiomeyer-io/mcp-server-attestation` and ETDI for MCP servers); §1.2 below now carries the narrowed composition claim adopted at the M0 gate. Watch items on record: see the canonical list with resolution conditions in `docs/research/whitespace-sweep.md` section 4 (Enclawed's trajectory; Ken Huang's skill signing essay before M6; the contested TC54 venue).
 
 ---
 
@@ -49,7 +49,7 @@ This project exists to manufacture the portfolio's missing upstream-standards co
 1. **CycloneDX agent-capability taxonomy** — property namespace / profile proposal targeted at Ecma TC54.
 2. **MCP Registry provenance RFC** — attestation-reference fields on registry entries + verify-on-publish, targeted at `modelcontextprotocol/registry`.
 
-The tool is the reference implementation of the proposals, not the other way around. Milestone M6 is not done until both drafts are submission-ready.
+The tool is the reference implementation of the proposals, not the other way around. Milestone M6 is not done until both drafts are submission-ready. Treat the TC54 venue as time sensitive: CycloneDX issue #895 (Agent BOM, March 2026, closed as duplicate) shows demand already circling the slot; evidence in `docs/research/whitespace-sweep.md` section 4.
 
 ---
 
@@ -255,7 +255,7 @@ Single comprehensive files preferred over fragmentation, per family convention.
 
 | Phase | Deliverable | Est. |
 |-------|-------------|------|
-| **M0 — Whitespace sweep** | Named prior-art validation of §1.2 (mcp-scan, ToolHive, ETDI, registry mechanisms, npm provenance); go/no-go + positioning notes feeding `proposals/` | 1–2 days |
+| **M0 — Whitespace sweep** | Done 2026-07-16: named prior art validation of §1.2 (Snyk Agent Scan, ToolHive, ETDI, registry mechanisms, npm provenance, plus nine discovered items); verdict, positioning, and watch items in `docs/research/whitespace-sweep.md`; narrowed claim adopted (decisions D7) | 1–2 days |
 | **M1 — Core model** | Manifest schema + strict validation, canonical bundle digest, finding/check codes, golden tests | 3–4 days |
 | **M2 — Attest** | `smithmark attest`: manifest generation, MCP tool-listing extraction, forgeseal composition, Sigstore signing (keyless + key), OCI attach | 4–5 days |
 | **M3 — Verify + discover** | `smithmark verify`: dual-path discovery, signature/Rekor/digest verification, npm provenance interop, VerificationReport + Evidence block | 4–5 days |
@@ -270,7 +270,7 @@ Single comprehensive files preferred over fragmentation, per family convention.
 
 The launch artifact is the portfolio closing its own loop:
 
-1. **better-call-claude** and **dear-claude** become the first MCP servers in the ecosystem shipping signed capability manifests — the maker's mark on tools that can place calls and touch Jira, which is exactly the demo that lands.
+1. **better-call-claude** and **dear-claude** become the first MCP servers in the ecosystem to ship capability manifests as portable, signed attestations composing the existing supply chain standards (near neighbors sign allowlists in silos; `docs/research/whitespace-sweep.md` documents them): the maker's mark on tools that can place calls and touch Jira, which is exactly the demo that lands.
 2. smithmark's own releases carry a forgeseal SBOM, SLSA provenance, a smithmark capability manifest (yes, the CLI attests itself), and are **gated by assayward** like the rest of the family.
 3. The Claude Code hook demonstrates admission: an agent runtime refusing to load an unattested or misdeclared MCP server, live, with an explainable deny from assayward.
 

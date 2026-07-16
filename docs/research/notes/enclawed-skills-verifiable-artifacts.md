@@ -1,4 +1,4 @@
-# Enclawed — "Skills as Verifiable Artifacts" (arXiv 2605.00424)
+# Enclawed: "Skills as Verifiable Artifacts" (arXiv 2605.00424)
 
 ## What it is
 An academic paper plus a working open source implementation, `enclawed` (github.com/metereconsulting/enclawed), by Alfredo Metere (Enclawed, LLC), arXiv:2605.00424v2 dated 2026-05-15. It proposes a trust schema for LLM agent skills in which each skill carries a signed manifest that enumerates the capabilities its content intends to invoke, and a runtime policy gate admits or denies calls against that manifest. This is the closest known neighbor for the SKILLS half of the smithmark claim and is the most serious threat found in the entire sweep.
