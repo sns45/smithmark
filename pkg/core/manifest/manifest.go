@@ -17,6 +17,7 @@ import (
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
 
+	"github.com/sns45/smithmark/pkg/core/bundle"
 	"github.com/sns45/smithmark/pkg/core/codes"
 )
 
@@ -449,4 +450,154 @@ func validDigestSet(d DigestSet) bool {
 		}
 	}
 	return true
+}
+
+// PredicateType identifies the smithmark agent capability predicate (spec
+// 2.3, decision D6). It ships verbatim in the TC54 CycloneDX draft, so this
+// exact string is a compatibility promise.
+const PredicateType = "https://in8.sh/attestation/agent-capability/v1"
+
+// statementType is the in-toto Statement v1 envelope type URI (spec 2.3).
+const statementType = "https://in-toto.io/Statement/v1"
+
+// bundleDigestKey is the DigestSet key a skill subject's canonical bundle
+// digest uses (decision U4). It is derived from bundle.Prefix rather than
+// restated, so the two packages can never drift apart.
+var bundleDigestKey = strings.TrimSuffix(bundle.Prefix, ":")
+
+// Subject identifies one in-toto statement subject (spec 2.3): a name and a
+// digest set. The digest set is the sole record of the subject's identity;
+// it is never duplicated into the predicate (decision D6).
+type Subject struct {
+	Name   string    `json:"name"`
+	Digest DigestSet `json:"digest"`
+}
+
+type Statement struct { // in-toto Statement v1 with a typed predicate.
+	// Typed rather than in-toto-golang's structpb statement so that strict
+	// parsing and canonical encoding hold end to end; DSSE enveloping and
+	// all crypto stay in sigstore-go per spec 2.2.
+	Type          string              `json:"_type"` // https://in-toto.io/Statement/v1
+	Subject       []Subject           `json:"subject"`
+	PredicateType string              `json:"predicateType"`
+	Predicate     *CapabilityManifest `json:"predicate"`
+}
+
+// NewStatement validates m, checks ref/predicate consistency, and builds
+// the subject: purl name for npm and pypi (pkg:npm/name@version with @scope
+// encoded as %40scope), plain name for skills, image ref for oci. Skill
+// subjects use the digest key "smithmark-bundle-v1" (U4).
+func NewStatement(ref ArtifactRef, m *CapabilityManifest) (*Statement, error) {
+	if m == nil {
+		return nil, errors.New("NewStatement: manifest must not be nil")
+	}
+	if issues := m.Validate(); len(issues) > 0 {
+		first := issues[0]
+		return nil, fmt.Errorf("%s: manifest is invalid at %s: %s", first.Code, first.Path, first.Detail)
+	}
+
+	if ref.Kind != m.Artifact.Kind {
+		return nil, fmt.Errorf("%s: ref kind %q does not match predicate artifact kind %q",
+			codes.ManifestKindSurfaceMismatch, ref.Kind, m.Artifact.Kind)
+	}
+	if ref.Name != m.Artifact.Name {
+		return nil, fmt.Errorf("%s: ref name %q does not match predicate artifact name %q",
+			codes.ManifestKindSurfaceMismatch, ref.Name, m.Artifact.Name)
+	}
+	if ref.Version != m.Artifact.Version {
+		return nil, fmt.Errorf("%s: ref version %q does not match predicate artifact version %q",
+			codes.ManifestKindSurfaceMismatch, ref.Version, m.Artifact.Version)
+	}
+	if ref.Source != m.Artifact.Source {
+		return nil, fmt.Errorf("%s: ref source %q does not match predicate artifact source %q",
+			codes.ManifestKindSurfaceMismatch, ref.Source, m.Artifact.Source)
+	}
+
+	return &Statement{
+		Type:          statementType,
+		Subject:       []Subject{{Name: subjectName(ref), Digest: ref.Digest}},
+		PredicateType: PredicateType,
+		Predicate:     m,
+	}, nil
+}
+
+// subjectName builds the in-toto subject name for ref: a purl for npm and
+// pypi packages, with a leading @scope percent encoded as %40scope; the
+// plain artifact name for skills, and for every other source, which covers
+// an oci image reference given verbatim in ref.Name (spec 2.3, decision D6).
+func subjectName(ref ArtifactRef) string {
+	if ref.Kind == KindSkill {
+		return ref.Name
+	}
+	switch ref.Source {
+	case SourceNPM:
+		return purlName("npm", ref.Name, ref.Version)
+	case SourcePyPI:
+		return purlName("pypi", ref.Name, ref.Version)
+	default:
+		return ref.Name
+	}
+}
+
+// purlName builds a package URL of the form pkg:ecosystem/name@version. A
+// leading @scope is percent encoded as %40scope, the only case where an npm
+// or PyPI name contains "@".
+func purlName(ecosystem, name, version string) string {
+	encoded := strings.ReplaceAll(name, "@", "%40")
+	return fmt.Sprintf("pkg:%s/%s@%s", ecosystem, encoded, version)
+}
+
+// Canonical returns the RFC 8785 canonical JSON encoding of the statement.
+// DSSE envelopes wrap these bytes unchanged (spec 2.2); Phase 2 signs and
+// Phase 3 verifies over them, exactly as CapabilityManifest.Canonical does
+// for a bare predicate.
+func (s *Statement) Canonical() ([]byte, error) {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	return jsoncanonicalizer.Transform(raw)
+}
+
+// ParseStatement decodes an in-toto statement strictly: unknown fields are
+// errors at every nesting level, the envelope type must equal
+// "https://in-toto.io/Statement/v1", the predicate type must equal
+// PredicateType, the subject must be non empty, and the predicate must be
+// present.
+func ParseStatement(data []byte) (*Statement, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var s Statement
+	if err := dec.Decode(&s); err != nil {
+		return nil, fmt.Errorf("statement parse: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("statement parse: trailing data after JSON document")
+	}
+	if s.Type != statementType {
+		return nil, fmt.Errorf("statement parse: unexpected _type %q, want %q", s.Type, statementType)
+	}
+	if s.PredicateType != PredicateType {
+		return nil, fmt.Errorf("statement parse: unexpected predicateType %q, want %q", s.PredicateType, PredicateType)
+	}
+	if len(s.Subject) == 0 {
+		return nil, errors.New("statement parse: subject must not be empty")
+	}
+	if s.Predicate == nil {
+		return nil, errors.New("statement parse: predicate must not be nil")
+	}
+	return &s, nil
+}
+
+// SubjectDigestFromBundle converts the prefixed output of bundle.Digest into
+// a DigestSet suitable for a statement subject: the key is
+// "smithmark-bundle-v1" and the value is the bare lowercase hex digest with
+// the prefix stripped, since a DigestSet value must be hex only (decisions
+// D6 and U6). It is strict about the expected prefix.
+func SubjectDigestFromBundle(prefixed string) (DigestSet, error) {
+	if !strings.HasPrefix(prefixed, bundle.Prefix) {
+		return nil, fmt.Errorf("SubjectDigestFromBundle: expected prefix %q, got %q", bundle.Prefix, prefixed)
+	}
+	digestHex := strings.TrimPrefix(prefixed, bundle.Prefix)
+	return DigestSet{bundleDigestKey: digestHex}, nil
 }
