@@ -270,3 +270,17 @@ established.
   attestation outcome rather than fabricating a full passing npm
   verification chain the committed fixtures were never signed to support.
   - **Source request**: `GET https://registry.npmjs.org/@sentry/mcp-server`
+
+## First party server snapshots (M6)
+
+`servers/better-call-claude/` and `servers/dear-claude/` are trimmed snapshots of the
+real MCP servers, taken 2026-07-17 from the local checkouts at commit state of that date
+(better-call-claude 3.1.1, dear-claude 1.1.0). Snapshot scope, approved by the maintainer:
+`src/**/*.ts`, `server.json`, `package.json`, `bun.lock`, and `LICENSE` per repo.
+
+Deliberately excluded and never committed: the `.mcpregistry_github_token` and
+`.mcpregistry_registry_token` files, `node_modules`, `dist`, `.git`, `.idea`, `.claude`,
+`.DS_Store`, the `mcp-publisher` binary, `assets/`, and `data/`. The staged snapshot was
+scanned for secret shaped content, embedded credentials in the lockfiles, and local path
+leakage before committing; all clean. `server.json` carries only environment variable
+names, never values.
