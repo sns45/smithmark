@@ -9,17 +9,55 @@
 #   2 = strict lint gate: a passing verification carried an UNDECLARED_ finding
 #   3 = operational failure (bad configuration, an unusable binary, a network
 #       error, or a missing required input)
+# Every one of these codes, including an early exit 3 before smithmark verify
+# ever runs, is also written to the exit-code step output through
+# exit_with_code below, so steps.<id>.outputs.exit-code is never left empty.
 set -euo pipefail
 
 SMITHMARK_MODULE="github.com/sns45/smithmark/cmd/smithmark"
 SMITHMARK_BIN=""
 
 # ---------------------------------------------------------------------------
+# Helper: write the exit code this script is about to leave with to
+# GITHUB_OUTPUT, so a follow up step can branch on
+# steps.<id>.outputs.exit-code (declared in action.yml) rather than only on
+# success or failure. GITHUB_OUTPUT is unset when this script runs outside a
+# real GitHub Actions job, exactly the case this action's own offline test
+# suite and any local invocation are in, so the write is skipped rather than
+# failing under set -u.
+#
+# exit_with_code is the single authority for leaving this script: every exit
+# site below, the missing ref check, both binary resolution failures, and the
+# final classified verify exit, calls it instead of a bare `exit N`, so the
+# output write can never be forgotten on an early operational exit and the
+# two never drift apart.
+#
+# A bare EXIT trap was considered instead and rejected: resolve_via_go_install
+# and download_release below each register their own EXIT trap for their own
+# temp directory cleanup, and a bash EXIT trap replaces rather than stacks
+# with whichever one was registered before it, so a trap set once here at the
+# top of the script would be silently clobbered the moment either of those
+# functions runs. Calling one shared helper from every exit site avoids that
+# entirely.
+# ---------------------------------------------------------------------------
+write_exit_code() {
+  local code="$1"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "exit-code=${code}" >> "${GITHUB_OUTPUT}"
+  fi
+}
+
+exit_with_code() {
+  write_exit_code "$1"
+  exit "$1"
+}
+
+# ---------------------------------------------------------------------------
 # 0. Validate the required input before spending any effort on the binary.
 # ---------------------------------------------------------------------------
 if [[ -z "${SMITHMARK_REF:-}" ]]; then
   echo "::error::smithmark-action: the 'ref' input is required" >&2
-  exit 3
+  exit_with_code 3
 fi
 
 # ---------------------------------------------------------------------------
@@ -165,7 +203,7 @@ if [[ -n "${SMITHMARK_INSTALL_FROM:-}" ]]; then
   else
     echo "smithmark-action: install-from '${SMITHMARK_INSTALL_FROM}' is not an executable file; treating it as a version to install with go install"
     if ! resolve_via_go_install "${SMITHMARK_INSTALL_FROM}"; then
-      exit 3
+      exit_with_code 3
     fi
   fi
 else
@@ -173,7 +211,7 @@ else
   if ! download_release "${SMITHMARK_VERSION}"; then
     echo "smithmark-action: release download failed; falling back to go install (documented fallback)" >&2
     if ! resolve_via_go_install "${SMITHMARK_VERSION}"; then
-      exit 3
+      exit_with_code 3
     fi
   fi
 fi
@@ -223,16 +261,9 @@ case "${CODE}" in
 esac
 
 # ---------------------------------------------------------------------------
-# 4. Surface the exit code as a step output, so a CI author can branch on
-# steps.<id>.outputs.exit-code (declared in action.yml) with a follow up
-# if: always() step, rather than only ever seeing success or failure at the
-# job level. GITHUB_OUTPUT is unset when this script runs outside a real
-# GitHub Actions job, exactly the case this action's own offline test suite
-# and any local invocation are in, so the write is skipped rather than
-# failing under set -u.
+# 4. Leave with verify's own exact code, never masked as success, through the
+# single exit_with_code authority defined above, so the exit-code step
+# output (declared in action.yml) is written here exactly the same way it is
+# on every earlier operational exit.
 # ---------------------------------------------------------------------------
-if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-  echo "exit-code=${CODE}" >> "${GITHUB_OUTPUT}"
-fi
-
-exit "${CODE}"
+exit_with_code "${CODE}"

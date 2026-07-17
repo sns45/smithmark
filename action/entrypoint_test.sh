@@ -282,6 +282,29 @@ assert_contains "GITHUB_OUTPUT tampered bundle exit-code" "exit-code=1" "$(cat "
 rm -f "${GITHUB_OUTPUT_FILE}"
 
 # ---------------------------------------------------------------------------
+# Test 7c: an early operational exit, the missing ref check, exits before
+# smithmark verify ever runs (before the binary is even resolved), the exact
+# path a residual review finding flagged: the exit-code write used to sit
+# only after the verify run, so this path returned before writing and left
+# steps.<id>.outputs.exit-code empty rather than 3. exit_with_code now backs
+# every exit site in entrypoint.sh, including this one, so this asserts the
+# fix directly rather than only the already covered post verify path above.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 7c: early operational exit (missing ref) still writes exit-code=3 ==="
+GITHUB_OUTPUT_FILE="$(mktemp)"
+EXIT_7C=0
+OUTPUT_7C="$(env \
+  SMITHMARK_INSTALL_FROM="${SMITHMARK_BIN}" \
+  SMITHMARK_REF="" \
+  GITHUB_OUTPUT="${GITHUB_OUTPUT_FILE}" \
+  bash "${SCRIPT_DIR}/entrypoint.sh" 2>&1)" || EXIT_7C=$?
+assert_exit "GITHUB_OUTPUT early exit (missing ref)" 3 "${EXIT_7C}"
+assert_contains "GITHUB_OUTPUT early exit annotation" "::error::smithmark-action: the 'ref' input is required" "${OUTPUT_7C}"
+assert_contains "GITHUB_OUTPUT early exit exit-code" "exit-code=3" "$(cat "${GITHUB_OUTPUT_FILE}")"
+rm -f "${GITHUB_OUTPUT_FILE}"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
