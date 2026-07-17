@@ -1,0 +1,65 @@
+name: "smithmark Verify"
+description: "Run smithmark verify against an agent tool artifact (an MCP server or a skill) as a supply chain check in CI."
+branding:
+  icon: "check-circle"
+  color: "green"
+
+inputs:
+  ref:
+    description: "The artifact to verify: an npm name@version, a local artifact directory, an OCI reference, or any value smithmark verify accepts as its positional argument (required)."
+    required: true
+  bundle:
+    description: "Verify this explicit attestation bundle file instead of discovering one. Maps to --bundle."
+    required: false
+    default: ""
+  strict:
+    description: "Set to true to exit 2 when a passing verification carries any UNDECLARED_ lint finding. Maps to --strict."
+    required: false
+    default: "false"
+  attestation-base:
+    description: "Base OCI registry for attestation discovery. Falls back to SMITHMARK_ATTESTATION_BASE or package.json when unset. Maps to --attestation-base."
+    required: false
+    default: ""
+  trust-root:
+    description: "Path to a PEM public key to verify key based bundles against. The Sigstore TUF trust root form lands in M6. Maps to --trust-root."
+    required: false
+    default: ""
+  certificate-identity:
+    description: "Expected signing certificate identity for keyless verification. Accepted but fails closed until M6 trust root support lands. Maps to --certificate-identity."
+    required: false
+    default: ""
+  certificate-oidc-issuer:
+    description: "Expected OIDC issuer for keyless verification. Accepted but fails closed until M6 trust root support lands. Maps to --certificate-oidc-issuer."
+    required: false
+    default: ""
+  output:
+    description: "Output format: summary or json. Maps to --output."
+    required: false
+    default: "summary"
+  install-from:
+    description: "Path to an already built smithmark binary, or a module version or ref to install with go install. When set, the release download is skipped entirely. This is the offline escape hatch this action's own test suite relies on."
+    required: false
+    default: ""
+  version:
+    description: "smithmark release version to download (for example v0.1.0) when install-from is empty, or latest. No smithmark release has shipped yet, so latest currently resolves to nothing; use install-from until a release exists, and pin a specific tag once one does."
+    required: false
+    default: "latest"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run smithmark verify
+      id: verify
+      shell: bash
+      env:
+        SMITHMARK_REF: ${{ inputs.ref }}
+        SMITHMARK_BUNDLE: ${{ inputs.bundle }}
+        SMITHMARK_STRICT: ${{ inputs.strict }}
+        SMITHMARK_ATTESTATION_BASE: ${{ inputs.attestation-base }}
+        SMITHMARK_TRUST_ROOT: ${{ inputs.trust-root }}
+        SMITHMARK_CERTIFICATE_IDENTITY: ${{ inputs.certificate-identity }}
+        SMITHMARK_CERTIFICATE_OIDC_ISSUER: ${{ inputs.certificate-oidc-issuer }}
+        SMITHMARK_OUTPUT: ${{ inputs.output }}
+        SMITHMARK_INSTALL_FROM: ${{ inputs.install-from }}
+        SMITHMARK_VERSION: ${{ inputs.version }}
+      run: bash "${{ github.action_path }}/entrypoint.sh"

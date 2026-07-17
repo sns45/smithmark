@@ -29,6 +29,16 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # Offline test for the action/ composite action (Task 5.1): builds the
+      # local smithmark binary and runs the action's own entrypoint against
+      # the committed signed skill fixtures through the install-from escape
+      # hatch, so no release download and no network are ever touched here.
+      # Ubuntu only: the suite is platform independent and shellcheck is only
+      # verified on this runner in review, so one runner suffices.
+      - name: Action offline test
+        if: matrix.os == 'ubuntu-latest'
+        run: bash action/entrypoint_test.sh
+
       # Static validation of the release config, so a broken .goreleaser.yaml is
       # caught on every PR rather than only at tag time. Run via the ephemeral
       # go run form Task 2.9 used, pinned to the version Task 2.9 resolved
