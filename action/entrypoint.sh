@@ -41,7 +41,13 @@ resolve_via_go_install() {
     echo "::error::smithmark-action: go install ${SMITHMARK_MODULE}@${ref} failed" >&2
     return 1
   fi
-  trap 'rm -rf "${go_bin_dir}"' EXIT
+  # The trap argument is expanded now, not deferred, so the cleanup path it
+  # runs still has the directory even after go_bin_dir, a local variable,
+  # goes out of scope when this function returns; a deferred single quoted
+  # expansion would fail as an unbound variable under set -u once the EXIT
+  # trap actually fires at real script exit.
+  # shellcheck disable=SC2064
+  trap "rm -rf '${go_bin_dir}'" EXIT
   SMITHMARK_BIN="${go_bin_dir}/smithmark"
   return 0
 }
@@ -101,6 +107,16 @@ download_release() {
 
   local tmp_dir
   tmp_dir="$(mktemp -d)"
+  # Registered immediately after mktemp, before any download or extraction is
+  # attempted, so any failure below leaves nothing behind even if a later
+  # caller (resolve_via_go_install) registers its own EXIT trap afterward. The
+  # argument is expanded now rather than deferred: tmp_dir is local to this
+  # function, so a deferred single quoted expansion would fail as an unbound
+  # variable under set -u once the EXIT trap actually fires at real script
+  # exit, after this function has already returned and tmp_dir has gone out
+  # of scope.
+  # shellcheck disable=SC2064
+  trap "rm -rf '${tmp_dir}'" EXIT
 
   echo "smithmark-action: downloading ${download_url}"
   if ! curl -fsSL --connect-timeout 10 --max-time 120 "${download_url}" -o "${tmp_dir}/${archive_name}"; then
@@ -109,15 +125,30 @@ download_release() {
     return 1
   fi
 
+  # unzip, tar, and chmod are guarded exactly like the curl call above: a
+  # failure here must return the operational code path (surfaced as exit 3 by
+  # the caller), never the tool's own raw exit status, which could otherwise
+  # collide with smithmark verify's own exit 1 (failed) or exit 2 (flagged).
   if [[ "${ext}" == "zip" ]]; then
-    unzip -q "${tmp_dir}/${archive_name}" -d "${tmp_dir}"
+    if ! unzip -q "${tmp_dir}/${archive_name}" -d "${tmp_dir}"; then
+      echo "smithmark-action: failed to extract ${archive_name}" >&2
+      rm -rf "${tmp_dir}"
+      return 1
+    fi
   else
-    tar -xzf "${tmp_dir}/${archive_name}" -C "${tmp_dir}"
+    if ! tar -xzf "${tmp_dir}/${archive_name}" -C "${tmp_dir}"; then
+      echo "smithmark-action: failed to extract ${archive_name}" >&2
+      rm -rf "${tmp_dir}"
+      return 1
+    fi
   fi
 
-  trap 'rm -rf "${tmp_dir}"' EXIT
   SMITHMARK_BIN="${tmp_dir}/${bin_name}"
-  chmod +x "${SMITHMARK_BIN}"
+  if ! chmod +x "${SMITHMARK_BIN}"; then
+    echo "smithmark-action: downloaded binary at ${SMITHMARK_BIN} is not executable" >&2
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
   echo "smithmark-action: installed ${version} at ${SMITHMARK_BIN}"
   return 0
 }

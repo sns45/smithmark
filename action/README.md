@@ -69,7 +69,7 @@ Because this is a composite action, the step's exit code propagates directly to 
 | `certificate-identity` | No | | Expected signing certificate identity for keyless verification. Maps to `--certificate-identity`. See the M6 note below: this currently fails closed. |
 | `certificate-oidc-issuer` | No | | Expected OIDC issuer for keyless verification. Maps to `--certificate-oidc-issuer`. See the M6 note below: this currently fails closed. |
 | `output` | No | `summary` | Output format: `summary` or `json`. Maps to `--output`. |
-| `install-from` | No | | Path to an already built `smithmark` binary, or a module version or ref to install with `go install`. When set, the release download is skipped entirely. This is the offline escape hatch used by this action's own test suite (see below). |
+| `install-from` | No | | Has two meanings, tried in this order. First: a path to an already built, executable `smithmark` binary, used directly with no download and no network call at all. This is the offline escape hatch this action's own test suite relies on (see below). Second, only when the value is not an executable file: a module version or ref, passed to `go install github.com/sns45/smithmark/cmd/smithmark@<value>`, a real network call to the Go module proxy. Either way, setting `install-from` skips the release download step entirely. |
 | `version` | No | `latest` | `smithmark` release version to download (for example `v0.1.0`) when `install-from` is empty, or `latest`. See the caveat below: no release has shipped yet. |
 
 ## Exit code contract

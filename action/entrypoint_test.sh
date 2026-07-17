@@ -188,6 +188,60 @@ assert_exit "certificate-identity fails closed" 3 "${EXIT_5}"
 assert_contains "certificate-identity operational annotation" "::error::smithmark verify exited 3" "${OUTPUT_5}"
 
 # ---------------------------------------------------------------------------
+# Test 6: a corrupted release archive surfaces exit 3, not a raw tool exit
+# status. The download path always makes a real network call, which this
+# offline suite must never do, so curl and go are shadowed on PATH with tiny
+# stub scripts: the curl stub writes garbage bytes to the -o target instead
+# of fetching anything, so the real download_release extraction guard in
+# entrypoint.sh runs against genuinely corrupt data; the go stub fails fast so
+# the documented go install fallback also cannot reach the network. Both
+# stubs are local files this test writes; neither one touches a socket.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 6: corrupted archive surfaces exit 3, never a raw tool exit code ==="
+STUB_DIR="$(mktemp -d)"
+
+cat > "${STUB_DIR}/curl" <<'STUB_CURL'
+#!/usr/bin/env bash
+# Test stub: pretend the download succeeded but the archive is corrupt, by
+# writing garbage bytes to the -o target. No network call is made.
+for ((i = 1; i <= $#; i++)); do
+  if [[ "${!i}" == "-o" ]]; then
+    j=$((i + 1))
+    printf 'not a real archive' > "${!j}"
+    exit 0
+  fi
+done
+exit 1
+STUB_CURL
+chmod +x "${STUB_DIR}/curl"
+
+cat > "${STUB_DIR}/go" <<'STUB_GO'
+#!/usr/bin/env bash
+# Test stub: pretend go install always fails immediately. No network call is
+# made, so the documented fallback path is proven without needing the module
+# proxy to be reachable.
+exit 1
+STUB_GO
+chmod +x "${STUB_DIR}/go"
+
+OUTPUT_6=""
+EXIT_6=0
+OUTPUT_6="$(env \
+  PATH="${STUB_DIR}:${PATH}" \
+  SMITHMARK_REF="${SKILL_REF}" \
+  SMITHMARK_VERSION="v0.0.0-test" \
+  RUNNER_OS="Linux" \
+  RUNNER_ARCH="X64" \
+  bash "${SCRIPT_DIR}/entrypoint.sh" 2>&1)" || EXIT_6=$?
+
+rm -rf "${STUB_DIR}"
+
+assert_exit "corrupted archive" 3 "${EXIT_6}"
+assert_contains "corrupted archive extraction error" "failed to extract" "${OUTPUT_6}"
+assert_contains "corrupted archive fallback attempted" "falling back to go install" "${OUTPUT_6}"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
