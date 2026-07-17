@@ -284,3 +284,69 @@ Deliberately excluded and never committed: the `.mcpregistry_github_token` and
 scanned for secret shaped content, embedded credentials in the lockfiles, and local path
 leakage before committing; all clean. `server.json` carries only environment variable
 names, never values.
+
+### The throwaway dogfood signing key
+
+> [!WARNING]
+> `servers/dogfood-signing-key.pem` is a throwaway, test only ECDSA P-256 key,
+> committed on purpose so the Task 6.1 dogfood attestations verify offline in CI.
+> It must NEVER sign a real artifact, a real release, or anything outside this test
+> corpus. It is a demo key with no secrecy value: treat it as public. The public
+> half, `servers/dogfood-signing-key-pub.pem`, is what the offline verification test
+> and the gen kit `--check` load. It is a separate key from
+> `signature/test-signing-key.pem`; the two trust anchors are independent.
+
+### The dogfood capability declarations and attestations
+
+Each server directory carries an honest, hand authored capability declaration and a
+committed signed attestation:
+
+- `servers/<name>/smithmark.yaml`: the capability manifest, authored by reading the
+  vendored `src`, not generated. Every declared egress host, filesystem path, exec
+  binary, env var, and secret is a capability the committed TypeScript actually
+  exercises. `smithmark lint servers/better-call-claude` and `servers/dear-claude`
+  both report zero findings; `servers/misdeclared-server` reports exactly one
+  `UNDECLARED_NETWORK_EGRESS`.
+- `servers/<name>/tools.json` (real servers only): the `--tools-from` tool listing,
+  transcribed from the inline JSON Schemas registered in the server `src`
+  (`index.ts` for better-call-claude, `mcp.ts` for dear-claude; both use plain JSON
+  Schema, not zod). It stands in for a live tool extraction (U2) that the real
+  release attestation would perform by launching the server. `inputSchemaDigest` is
+  computed by `manifest.SchemaDigest` over each schema.
+- `servers/<name>/attestation.sigstore.json`: the signed capability bundle, a real
+  DSSE signature over the canonical statement, produced with the dogfood key.
+
+The `servers/misdeclared-server/` fixture is a tiny synthetic MCP server whose
+`smithmark.yaml` declares zero capabilities of every class while `src/index.ts`
+calls `fetch` to an exfiltration host. Its attestation is cryptographically honest
+(a real signature over its true subject digest); only the declared capability set is
+a lie, so `smithmark verify` passes it and the capability lint is what catches the
+gap. It exists for the Task 6.5 hook demo, which blocks a validly signed server on
+the capability gap the signature cannot see.
+
+Subject digest: the two real servers are vendored source snapshots, not published
+npm tarballs, so no real tarball integrity digest exists. Each attestation carries a
+fabricated fixed 128 hex `sha512` subject digest (a visibly synthetic repeating
+pattern), exactly the stand in pattern `testdata/gen` uses for its fake npm subject.
+The real release attestation, run with `smithmark attest` over the published tarball,
+would carry that tarball's true `sha512`.
+
+Dependency SBOM: `forgeseal` is not required to be on PATH for this offline fixture
+kit, so the dogfood attestations omit the dependencies block (equivalent to
+`--skip-sbom`). The real release attestation composes the forgeseal SBOM; when
+`forgeseal` is present locally, a dogfood attestation can carry it too.
+
+### Regenerating and checking the dogfood attestations
+
+```
+go run ./testdata/servers/gen            # regenerate every dogfood attestation (requires the committed dogfood key)
+go run ./testdata/servers/gen --check    # verify the committed dogfood attestations stay honest
+```
+
+Like `testdata/gen`, the ECDSA signature bytes are not byte reproducible (a per
+signature nonce is drawn from `crypto/rand`), so regeneration changes the bundle
+bytes while the payloads stay identical. `--check` verifies each committed bundle
+against the committed public key and confirms it carries the expected payload and
+subject digest, rather than a byte for byte diff. The offline signature verification,
+predicate validation, and lint outcome per server are additionally pinned by
+`TestDogfoodAttestationsVerifyOffline` in `cmd/smithmark`.
