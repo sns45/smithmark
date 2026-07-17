@@ -8,7 +8,10 @@
 // machinery; the declared versus detected gap engine that turns a Detection
 // into a Finding lands in Task 4.3. This package stays pure and never
 // touches a filesystem itself, exactly like the rest of pkg/core: sources
-// always arrive pre read as bytes.
+// always arrive pre read as bytes. Task 4.3 adds that gap engine, Gaps,
+// plus the name aware env Symbol capture ("env:FOO") both DetectJS and
+// DetectPython feed it, alongside a sanctioned change to the env patterns
+// themselves.
 package lint
 
 import (
@@ -17,7 +20,11 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/sns45/smithmark/pkg/core/codes"
+	"github.com/sns45/smithmark/pkg/core/manifest"
 )
 
 // Finding is one capability lint result: a stable machine readable Code, a
@@ -89,6 +96,17 @@ type pattern struct {
 // same class both match one line: the first match in this order wins, and
 // DetectJS still emits only one Detection for that line and class either
 // way (see the DetectJS doc comment).
+//
+// The env entries are the one place a pattern carries a real regexp
+// capturing group (task 4.3): process.env.FOO and process.env["FOO"] both
+// capture FOO, and matchSymbol turns a non empty capture into the language
+// neutral Symbol shape "env:FOO" rather than the pattern's own static
+// symbol field, so Gaps can key off variable name without caring which
+// language produced the Detection. The final env entry is the pre task 4.3
+// bare pattern kept as a fallback: an access this heuristic cannot resolve
+// to a literal name, such as passing process.env itself around or
+// iterating its keys, still reports a Detection, just with Symbol left as
+// the bare "process.env" rather than a name.
 var jsPatterns = []pattern{
 	// network
 	{"network", "fetch", regexp.MustCompile(`\bfetch\(`)},
@@ -109,6 +127,8 @@ var jsPatterns = []pattern{
 	{"exec", "execa", regexp.MustCompile(`\bexeca\b`)},
 	{"exec", "Bun.spawn", regexp.MustCompile(`Bun\.spawn`)},
 	// env
+	{"env", "process.env", regexp.MustCompile(`process\.env\.([A-Za-z_$][A-Za-z0-9_$]*)`)},
+	{"env", "process.env", regexp.MustCompile(`process\.env\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]`)},
 	{"env", "process.env", regexp.MustCompile(`process\.env`)},
 }
 
@@ -227,7 +247,17 @@ var pyPatterns = []pattern{
 	{"exec", "os.system", regexp.MustCompile(`os\.system\(`)},
 	{"exec", "os.exec", regexp.MustCompile(`os\.exec`)},
 	{"exec", "os.popen", regexp.MustCompile(`os\.popen\(`)},
-	// env
+	// env: mirrors jsPatterns' name capture (task 4.3). os.environ["FOO"] and
+	// os.environ.get("FOO") both capture "FOO" into the same "env:FOO" Symbol
+	// shape process.env.FOO reports, keeping Gaps language neutral; os.getenv
+	// captures its literal first argument the same way. Each named form is
+	// followed by its own unnamed fallback, so a dynamic or otherwise
+	// unresolvable access, such as os.getenv(some_variable), still reports a
+	// Detection, with the bare "os.environ" or "os.getenv" Symbol rather than
+	// going undetected.
+	{"env", "os.environ", regexp.MustCompile(`os\.environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]`)},
+	{"env", "os.environ", regexp.MustCompile(`os\.environ\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']`)},
+	{"env", "os.getenv", regexp.MustCompile(`os\.getenv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']`)},
 	{"env", "os.environ", regexp.MustCompile(`os\.environ`)},
 	{"env", "os.getenv", regexp.MustCompile(`os\.getenv`)},
 }
@@ -282,6 +312,32 @@ type detection struct {
 	line   int
 }
 
+// envSymbolPrefix is the language neutral Symbol prefix a name aware env
+// match carries (task 4.3): matchSymbol renders a captured variable name
+// FOO as "env:FOO", and Gaps strips this exact prefix back off to recover
+// the name, so the two must never drift apart.
+const envSymbolPrefix = "env:"
+
+// matchSymbol reports whether line matches p and, if so, the Symbol a
+// Detection for that match should carry. Most patterns carry no regexp
+// capturing group, so the static p.symbol is reported unchanged; the env
+// patterns are the one case that do (see the jsPatterns and pyPatterns doc
+// comments), and when the capturing group matched non empty text, the
+// Symbol reported is envSymbolPrefix plus that text instead, the shared
+// name aware shape both DetectJS's and DetectPython's env patterns produce
+// so Gaps can key off a variable name without caring which language
+// produced the Detection.
+func matchSymbol(p pattern, line string) (symbol string, ok bool) {
+	m := p.pattern.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	if len(m) > 1 && m[1] != "" {
+		return envSymbolPrefix + m[1], true
+	}
+	return p.symbol, true
+}
+
 // scanSource applies patterns to f line by line, collapsing repeat matches
 // of the same class on one line into a single detection. Shared by DetectJS
 // (with jsPatterns) and DetectPython (with pyPatterns).
@@ -302,11 +358,11 @@ func scanSource(f Source, patterns []pattern) []detection {
 			if matchedClasses[p.class] {
 				continue
 			}
-			if p.pattern.MatchString(line) {
+			if symbol, matched := matchSymbol(p, line); matched {
 				matchedClasses[p.class] = true
 				out = append(out, detection{
 					class:  p.class,
-					symbol: p.symbol,
+					symbol: symbol,
 					path:   f.Path,
 					line:   lineNum,
 				})
@@ -332,11 +388,8 @@ func runDetector(files []Source, extensions []string, patterns []pattern) []Dete
 		dets = append(dets, scanSource(f, patterns)...)
 	}
 	sort.Slice(dets, func(i, j int) bool {
-		if dets[i].path != dets[j].path {
-			return dets[i].path < dets[j].path
-		}
-		if dets[i].line != dets[j].line {
-			return dets[i].line < dets[j].line
+		if dets[i].path != dets[j].path || dets[i].line != dets[j].line {
+			return lessLocation(dets[i].path, dets[i].line, dets[j].path, dets[j].line)
 		}
 		if dets[i].class != dets[j].class {
 			return dets[i].class < dets[j].class
@@ -352,4 +405,196 @@ func runDetector(files []Source, extensions []string, patterns []pattern) []Dete
 		}
 	}
 	return out
+}
+
+// lessLocation reports whether (aPath, aLine) sorts before (bPath, bLine):
+// path first, then line compared as a parsed integer, never as part of a
+// flat "path:line" string comparison, which would sort "path:10" before
+// "path:7" since "1" is lexicographically less than "7"
+// (TestDetectJSSortsByNumericLineNotLexicographic pins this for
+// detections). runDetector calls this directly on the path and line fields
+// it already carries separately while sorting a []detection; Gaps calls it
+// after splitLocation parses a Finding's already formatted Location string
+// back apart, so the two share this one comparison rather than each
+// restating it (task 4.3's "share the sort helper" requirement).
+func lessLocation(aPath string, aLine int, bPath string, bLine int) bool {
+	if aPath != bPath {
+		return aPath < bPath
+	}
+	return aLine < bLine
+}
+
+// splitLocation parses a "path:line" Location, as Detection.Location and
+// Finding.Location both format it, back into its path and numeric line.
+// Gaps uses this to feed lessLocation the same numeric aware comparison
+// runDetector uses, even though a Finding only ever carries the already
+// formatted string, never the separate fields runDetector keeps. The line
+// suffix is expected to always parse as an integer, since every producer of
+// a Location string in this package formats it with "%d"; a location that
+// somehow fails to parse sorts as line 0 rather than panicking.
+func splitLocation(loc string) (path string, line int) {
+	idx := strings.LastIndex(loc, ":")
+	if idx < 0 {
+		return loc, 0
+	}
+	line, _ = strconv.Atoi(loc[idx+1:])
+	return loc[:idx], line
+}
+
+// classFindings maps a Detection Class other than env to the Finding Code
+// and severity Gaps reports when that class fires undeclared (spec 1.1
+// item 3). Network and exec are high severity, since an undeclared egress
+// destination or an undeclared executed binary are the two most
+// consequential surprises a manifest can hide from a reviewer; filesystem
+// is medium. Env is handled separately in Gaps itself, since its severity
+// and suppression rule depend on whether the Detection names a specific
+// variable (see the Gaps doc comment).
+var classFindings = map[string]struct {
+	code     string
+	severity string
+}{
+	"network":    {codes.UndeclaredNetworkEgress, "high"},
+	"filesystem": {codes.UndeclaredFilesystem, "medium"},
+	"exec":       {codes.UndeclaredExec, "high"},
+}
+
+// envDeclared reports whether name is covered by declaredEnv: either some
+// entry equals name exactly, or some entry ends in "*" and its prefix (the
+// entry with the trailing "*" removed) is a prefix of name, so a declared
+// "AWS_*" covers "AWS_KEY". This same rule also covers the bare wildcard
+// escape hatch without a separate special case: a declared bare "*" has an
+// empty prefix, and every name has the empty string as a prefix, so "*"
+// covers every name.
+func envDeclared(declaredEnv []string, name string) bool {
+	for _, d := range declaredEnv {
+		if d == name {
+			return true
+		}
+		if prefix, ok := strings.CutSuffix(d, "*"); ok && strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Gaps computes the declared versus detected gap this package's name
+// promises (spec 1.1 item 3): given a manifest's declared CapabilitySet and
+// the Detections DetectJS or DetectPython found across a source tree, it
+// reports every Detection whose capability class the manifest leaves
+// uncovered as an UNDECLARED_* Finding. Gaps is pure: it does no I/O and
+// depends on nothing but its two arguments.
+//
+// Severities are fixed per class (see classFindings and the env case
+// below): network and exec are high, filesystem is medium, env is medium
+// when Gaps can name the specific variable and low when it cannot.
+//
+// Suppression differs by class. For network, filesystem, and exec, ANY non
+// empty declared list for that class suppresses every Detection of that
+// class, matched or not: a Detection's Symbol names the matched construct,
+// such as fetch or child_process, never the actual destination host, path,
+// or binary the call resolves to at runtime, so Gaps has no static way to
+// compare one detected call against one specific declared entry. Matching
+// specific hosts or paths against detected symbols is beyond what these
+// static heuristics can honestly claim (spec 1.3): rather than pretend to
+// check membership and get it wrong, v0.1 treats any declaration for the
+// class as proof the class was considered at all, and reports the class as
+// either fully covered or fully undeclared, never partially. A declared
+// bare "*" (egress host "*", fs path "*" or "**", exec binary "*") is one
+// way to declare the class this way, not a distinct rule; an empty list is
+// the only declaration that leaves the class undeclared.
+//
+// Env is the one class Gaps can be precise about, because the detectors
+// capture the variable name into Symbol when the source names it literally
+// (see the jsPatterns and pyPatterns doc comments): a named Detection's
+// Symbol has the shape "env:FOO". A named Detection fires UNDECLARED_ENV at
+// medium severity, with Detail naming the variable, unless FOO is declared
+// exactly or a declared entry ending in "*" has FOO as a prefix match (see
+// envDeclared); that same trailing star rule is also why a bare declared
+// "*" suppresses every name, without a separate case for it. A bare env
+// Detection, one whose Symbol carries no name because the source read the
+// environment through some access DetectJS or DetectPython could not
+// resolve to a literal variable, fires UNDECLARED_ENV at low severity with
+// a generic Detail instead, and is suppressed by any non empty declared env
+// list at all, named or wildcard, on the theory that an author who declared
+// at least one env var has considered the class at all.
+//
+// A declared capability that no Detection ever matches is never a Finding:
+// over declaration is policy's business, not lint's (spec 1.3).
+//
+// The result is deduplicated by (Code, Location) and sorted by Code, then
+// by Location with the same numeric line aware comparison DetectJS and
+// DetectPython use (lessLocation, shared via splitLocation), so identical
+// input produces byte identical output on every call. A nil or empty
+// detections slice, or a declared set that covers every Detection, yields a
+// non nil empty slice rather than nil, the same convention
+// CapabilityManifest.Validate uses so a JSON encoding renders [] rather
+// than null.
+func Gaps(declared manifest.CapabilitySet, detections []Detection) []Finding {
+	findings := []Finding{}
+	seen := make(map[[2]string]bool)
+	add := func(code, severity, detail, location string) {
+		key := [2]string{code, location}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		findings = append(findings, Finding{
+			Code:     code,
+			Severity: severity,
+			Detail:   detail,
+			Location: location,
+		})
+	}
+
+	networkDeclared := len(declared.NetworkEgress) > 0
+	filesystemDeclared := len(declared.Filesystem) > 0
+	execDeclared := len(declared.Exec) > 0
+
+	for _, d := range detections {
+		switch d.Class {
+		case "network":
+			if !networkDeclared {
+				cf := classFindings[d.Class]
+				add(cf.code, cf.severity,
+					fmt.Sprintf("network egress via %s is not declared in capabilities.networkEgress", d.Symbol),
+					d.Location)
+			}
+		case "filesystem":
+			if !filesystemDeclared {
+				cf := classFindings[d.Class]
+				add(cf.code, cf.severity,
+					fmt.Sprintf("filesystem access via %s is not declared in capabilities.filesystem", d.Symbol),
+					d.Location)
+			}
+		case "exec":
+			if !execDeclared {
+				cf := classFindings[d.Class]
+				add(cf.code, cf.severity,
+					fmt.Sprintf("exec via %s is not declared in capabilities.exec", d.Symbol),
+					d.Location)
+			}
+		case "env":
+			if name, named := strings.CutPrefix(d.Symbol, envSymbolPrefix); named {
+				if !envDeclared(declared.Env, name) {
+					add(codes.UndeclaredEnv, "medium",
+						fmt.Sprintf("env var %s is not declared in capabilities.env", name),
+						d.Location)
+				}
+			} else if len(declared.Env) == 0 {
+				add(codes.UndeclaredEnv, "low",
+					fmt.Sprintf("undeclared environment access via %s", d.Symbol),
+					d.Location)
+			}
+		}
+	}
+
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Code != findings[j].Code {
+			return findings[i].Code < findings[j].Code
+		}
+		iPath, iLine := splitLocation(findings[i].Location)
+		jPath, jLine := splitLocation(findings[j].Location)
+		return lessLocation(iPath, iLine, jPath, jLine)
+	})
+	return findings
 }

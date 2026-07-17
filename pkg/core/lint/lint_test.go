@@ -118,15 +118,24 @@ func TestDetectJSExecClass(t *testing.T) {
 	}
 }
 
+// TestDetectJSEnvClass pins the name aware env Symbol shape task 4.3 adds:
+// a dot or bracket access whose variable name is syntactically present in
+// the source reports Symbol "env:NAME", the same shape DetectPython reports
+// for os.environ and os.getenv, so Gaps can key off it without caring which
+// language produced the Detection. A bare access DetectJS cannot resolve to
+// a literal name still reports a Detection, just with the pre task 4.3
+// Symbol left bare.
 func TestDetectJSEnvClass(t *testing.T) {
 	src := loadJSFixture(t, "env.mjs")
 	dets := lint.DetectJS([]lint.Source{src})
 
-	mustDetect(t, dets, src, `process.env.API_KEY`, "env", "process.env")
-	mustDetect(t, dets, src, `process.env.NODE_ENV`, "env", "process.env")
+	mustDetect(t, dets, src, `process.env.API_KEY`, "env", "env:API_KEY")
+	mustDetect(t, dets, src, `process.env.NODE_ENV`, "env", "env:NODE_ENV")
+	mustDetect(t, dets, src, `process.env["BRACKET_KEY"]`, "env", "env:BRACKET_KEY")
+	mustDetect(t, dets, src, `wholeEnv = process.env`, "env", "process.env")
 
-	if len(dets) != 2 {
-		t.Errorf("len(dets) = %d, want 2 (no detections beyond the env table)", len(dets))
+	if len(dets) != 4 {
+		t.Errorf("len(dets) = %d, want 4 (no detections beyond the env table)", len(dets))
 	}
 }
 

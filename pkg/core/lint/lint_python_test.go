@@ -77,15 +77,24 @@ func TestDetectPythonExecClass(t *testing.T) {
 	}
 }
 
+// TestDetectPythonEnvClass pins the name aware env Symbol shape task 4.3
+// adds, mirroring DetectJS: os.environ["FOO"], os.environ.get("FOO"), and
+// os.getenv("FOO") all report Symbol "env:FOO", the same language neutral
+// shape process.env.FOO reports, so Gaps can key off it without caring
+// which language produced the Detection. A bare os.environ access
+// DetectPython cannot resolve to a literal name still reports a Detection,
+// just with the pre task 4.3 Symbol left bare.
 func TestDetectPythonEnvClass(t *testing.T) {
 	src := loadPyFixture(t, "env.py")
 	dets := lint.DetectPython([]lint.Source{src})
 
-	mustDetect(t, dets, src, `os.environ["API_KEY"]`, "env", "os.environ")
-	mustDetect(t, dets, src, `os.getenv("DEBUG")`, "env", "os.getenv")
+	mustDetect(t, dets, src, `os.environ["API_KEY"]`, "env", "env:API_KEY")
+	mustDetect(t, dets, src, `os.getenv("DEBUG")`, "env", "env:DEBUG")
+	mustDetect(t, dets, src, `os.environ.get("TIMEOUT")`, "env", "env:TIMEOUT")
+	mustDetect(t, dets, src, `whole_env = os.environ`, "env", "os.environ")
 
-	if len(dets) != 2 {
-		t.Errorf("len(dets) = %d, want 2 (no detections beyond the env table)", len(dets))
+	if len(dets) != 4 {
+		t.Errorf("len(dets) = %d, want 4 (no detections beyond the env table)", len(dets))
 	}
 }
 
