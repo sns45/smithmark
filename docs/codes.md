@@ -4,7 +4,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 
 **Kind** distinguishes how a code is used:
 - `validation`: a semantic issue found in a capability manifest or skill bundle at parse or digest time.
-- `check`: a pass or fail outcome recorded in a `VerificationReport` during `smithmark verify`.
+- `check`: a pass or fail outcome recorded in a `VerificationReport` during `smithmark verify`. Checks fall in two classes. A failing check drives the nonzero verify exit code (D4) when it fails. An informational check is marked `informational` in the report, never drives an exit code, and is left for downstream policy such as assayward to weigh; a failed informational check is a normal, non blocking observation.
 - `finding`: a declared versus detected capability gap recorded by the capability lint.
 - `operational`: a condition outside the pure core, such as a missing external tool or an unresolved configuration value.
 
@@ -39,15 +39,15 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `BUNDLE_MODE_INVALID` | validation | A bundle file mode is not regular or executable. | M1 |
 | `BUNDLE_DIGEST_INVALID` | validation | A bundle file sha256 is not lowercase hex of the expected length. | M1 |
 | `BUNDLE_SYMLINK_REJECTED` | validation | A symlink was found while walking a skill root; reserved for M2, since the pure core defined here never touches the filesystem itself. | M1 |
-| `SIGNATURE_VALID` | check | The DSSE envelope signature verified successfully; reserved for M3. | M1 |
-| `REKOR_INCLUSION_VALID` | check | The signature's transparency log inclusion proof verified successfully; reserved for M3. | M1 |
-| `SUBJECT_DIGEST_MATCH` | check | The attested subject digest matches the digest of the artifact being verified; reserved for M3. | M1 |
-| `MANIFEST_SCHEMA_VALID` | check | The capability manifest carried by the attestation passed semantic validation; reserved for M3. | M1 |
-| `PROVENANCE_PRESENT` | check | A provenance attestation was found alongside the artifact; reserved for M3. | M1 |
-| `NPM_PROVENANCE_VERIFIED` | check | An npm package's own provenance attestation verified successfully; reserved for M3. | M1 |
-| `ATTESTATION_MISSING` | check | No attestation bundle was found for the artifact, so verification fails outright; reserved for M3. | M1 |
-| `DEPENDENCY_SBOM_MISSING` | check | The manifest carries no dependency SBOM reference, reported informationally rather than as a failure; reserved for M3. | M1 |
-| `PREDICATE_VERSION_UNSUPPORTED` | check | The predicate version inside the attestation statement is not one this build understands; reserved for M3. | M1 |
+| `SIGNATURE_VALID` | check | Failing check: the DSSE envelope signature verified successfully against the trust material. A failure stops the payload derived checks from being trusted. | M1 |
+| `REKOR_INCLUSION_VALID` | check | Informational check: the signature's transparency log inclusion proof verified successfully. Key based offline bundles legitimately carry no inclusion entry, so this failing is a normal observation rather than a blocking one. | M1 |
+| `SUBJECT_DIGEST_MATCH` | check | Failing check: the attested subject digest matches the digest of the artifact being verified, on both the algorithm keys and their values. | M1 |
+| `MANIFEST_SCHEMA_VALID` | check | Failing check: the capability manifest carried by the attestation passed semantic validation. A failure aggregates every validation issue, so an unsupported manifest schemaVersion surfaces here as `MANIFEST_SCHEMA_VERSION_UNSUPPORTED`. | M1 |
+| `PROVENANCE_PRESENT` | check | Informational check: an npm provenance attestation was supplied and its enveloped statement declares a SLSA provenance predicate. | M1 |
+| `NPM_PROVENANCE_VERIFIED` | check | Informational check: an npm package's own provenance attestation was cryptographically verified. Full verification needs the Sigstore trust root and is exercised live in M6; the key based trust material of v0.1 does not suit it, so v0.1 reports it as not attempted. | M1 |
+| `ATTESTATION_MISSING` | check | Failing check: no attestation bundle was found for the artifact, so verification fails outright and every other check is marked not evaluated. When several candidate bundles are present, its detail carries the multi candidate summary. | M1 |
+| `DEPENDENCY_SBOM_MISSING` | check | Informational check: the manifest carries no dependency SBOM reference. It fails when the dependencies block is absent, reported as an observation rather than a blocking failure. | M1 |
+| `PREDICATE_VERSION_UNSUPPORTED` | check | Failing check: the predicate version inside the attestation statement is not one this build understands. It covers both an unknown predicateType and a predicate whose schema the strict parse cannot understand; the detail distinguishes them. | M1 |
 | `HOSTED_ENDPOINT_UNSUPPORTED` | check | A registry entry points only at a remote endpoint, reported informationally since this build does not attest hosted servers; reserved for M3. | M1 |
 | `UNDECLARED_NETWORK_EGRESS` | finding | Detected code performs network egress the manifest does not declare; reserved for M4. | M1 |
 | `UNDECLARED_FILESYSTEM` | finding | Detected code accesses the filesystem in a way the manifest does not declare; reserved for M4. | M1 |
