@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -155,9 +154,9 @@ func FetchRegistryEntry(ctx context.Context, serverName string, opts ResolveOpti
 		return nil, codes.E(codes.DiscoveryFailed, "fetching registry entry for %s: unexpected status %s", serverName, resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, fmt.Sprintf("registry entry body for %s", serverName))
 	if err != nil {
-		return nil, codes.E(codes.DiscoveryFailed, "reading registry entry body for %s: %v", serverName, err)
+		return nil, err
 	}
 
 	var env registryEnvelope

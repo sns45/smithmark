@@ -154,7 +154,10 @@ func TestRegistryCheckServerNotFoundExitsThree(t *testing.T) {
 // TestRegistryCheckSummaryMode smoke tests the human summary surface for a
 // remote only entry: one line per check plus a verdict line, asserted
 // loosely (contains codes and verdict), never goldened, matching how
-// TestVerifySummaryMode asserts verify's own summary output.
+// TestVerifySummaryMode asserts verify's own summary output. A remote only
+// entry carries only informational registry checks, so no failing class check
+// ever ran: the verdict is NOT EVALUATED, not VERIFIED (which would imply a
+// failing class check ran and passed).
 func TestRegistryCheckSummaryMode(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	d := verifyDeps(t, &stdout, &stderr)
@@ -167,7 +170,7 @@ func TestRegistryCheckSummaryMode(t *testing.T) {
 		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{codes.RegistryAttestationRefPresent, codes.HostedEndpointUnsupported, "VERIFIED"} {
+	for _, want := range []string{codes.RegistryAttestationRefPresent, codes.HostedEndpointUnsupported, "NOT EVALUATED"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary output does not contain %q:\n%s", want, out)
 		}

@@ -79,6 +79,9 @@ func newRegistryCheckCmd(d *deps) *cobra.Command {
 // a remote only entry always exits 0, while an npm backed entry's own
 // verification failures exit 1 and discovery failures exit 3.
 func runRegistryCheck(ctx context.Context, d *deps, serverName string, o *registryOptions) error {
+	if err := validateOutputFormat(o.output); err != nil {
+		return err
+	}
 	entry, err := discover.FetchRegistryEntry(ctx, serverName, discover.ResolveOptions{
 		Transport: d.Transport,
 	})
@@ -123,7 +126,9 @@ func runRegistryCheck(ctx context.Context, d *deps, serverName string, o *regist
 // an npm package, the shared discovery and verification core runs exactly as
 // verify's own runVerify does, and registryChecks is merged into the
 // resulting report's Checks, which are then sorted by Code again (the same
-// determinism guarantee every VerificationReport carries).
+// determinism guarantee every VerificationReport carries). Either shape returns
+// the same VerificationReport type, so registry check and verify emit one JSON
+// output schema and a consumer needs only a single parser for both commands.
 func buildRegistryReport(ctx context.Context, d *deps, entry *discover.RegistryEntry, registryChecks []verify.CheckResult, o *registryOptions) (*verify.VerificationReport, error) {
 	npmPkg, hasNPM := entry.NPMPackage()
 	if !hasNPM {
@@ -133,10 +138,13 @@ func buildRegistryReport(ctx context.Context, d *deps, entry *discover.RegistryE
 				Name:   entry.Name,
 				Source: manifest.SourceMCPRegistry,
 			},
-			Checks:     sortedChecks(registryChecks),
-			Findings:   []lint.Finding{},
-			Evidence:   nil,
-			VerifiedAt: d.Now().UTC(),
+			Checks:   sortedChecks(registryChecks),
+			Findings: []lint.Finding{},
+			Evidence: nil,
+			// No attestation bundle was ever fetched for a no npm entry, so there
+			// is no winning candidate to build evidence from.
+			WinningBundle: -1,
+			VerifiedAt:    d.Now().UTC(),
 		}, nil
 	}
 

@@ -378,6 +378,39 @@ func TestNPMProvenancePresentPasses(t *testing.T) {
 	assertPassed(t, report, codes.SubjectDigestMatch)
 }
 
+// TestZeroBundleStillEvaluatesProvenance proves the zero bundle branch still
+// evaluates the two informational npm provenance checks against in.NPMProvenance
+// (they are input driven, not bundle derived), while the bundle derived
+// ATTESTATION_MISSING still fails: no bundles plus a real SLSA provenance
+// fixture yields PROVENANCE_PRESENT passed true alongside a failed
+// ATTESTATION_MISSING.
+func TestZeroBundleStillEvaluatesProvenance(t *testing.T) {
+	report, err := verify.Run(verify.Input{
+		Ref:           npmRef(),
+		Bundles:       nil,
+		NPMProvenance: slsaProvenanceBundle(t),
+		TrustMaterial: loadTrust(t),
+		Now:           fixedNow,
+	}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertFailed(t, report, codes.AttestationMissing)
+	c := checkFor(t, report, codes.ProvenancePresent)
+	if !c.Passed {
+		t.Errorf("PROVENANCE_PRESENT = failed, want passed with a real SLSA provenance bundle and no primary attestation; detail: %s", c.Detail)
+	}
+	if !c.Informational {
+		t.Error("PROVENANCE_PRESENT must be informational")
+	}
+	// NPM_PROVENANCE_VERIFIED is still evaluated here (informational, false in
+	// v0.1), not left as the "not evaluated" placeholder the no bundle branch
+	// used to stamp on it.
+	if !checkFor(t, report, codes.NPMProvenanceVerified).Informational {
+		t.Error("NPM_PROVENANCE_VERIFIED must be informational")
+	}
+}
+
 // TestCertExpiryNotConstructibleOffline records why there is no expired or
 // revoked certificate row in this offline matrix. The Task 3.1 fixtures are key
 // based bundles: they carry a bare public key and no Fulcio issued certificate,
@@ -579,9 +612,9 @@ func TestChecksAreSortedByCode(t *testing.T) {
 // TestCheckOutcomesSetOnlyInVerifyPackage enforces spec 3's rule that check
 // outcomes are decided in exactly one place. No package other than
 // pkg/core/verify may construct a CheckResult, so nothing downstream can mint a
-// passing check by re-reading an envelope it trusts on its own authority. The
-// guard is a source scan, the same lightweight technique the purity and clock
-// guards use.
+// passing check by reading an envelope a second time and trusting it on its own
+// authority. The guard is a source scan, the same lightweight technique the
+// purity and clock guards use.
 func TestCheckOutcomesSetOnlyInVerifyPackage(t *testing.T) {
 	_, self, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(self), "..", "..", "..")

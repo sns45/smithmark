@@ -105,6 +105,17 @@ func productionDeps() *deps {
 		Transport: nil, // net/http's http.DefaultTransport
 		Registry:  "",  // registry.npmjs.org
 		ReadTarget: func(_ context.Context, repo string) (oras.ReadOnlyGraphTarget, error) {
+			if repo == "" {
+				// Live OCI attestation discovery needs a per artifact repository, but
+				// v0.1 passes the attestation base straight through and does not yet
+				// scope the client to the repository AttestationRef computes; when the
+				// base resolves to empty, remote.NewRepository would fail with an
+				// uncoded error surfaced as INTERNAL_ERROR. Fail closed with a coded
+				// DISCOVERY_FAILED naming the limitation instead (tracked in
+				// sns45/smithmark#4; the live wiring lands with M6).
+				return nil, codes.E(codes.DiscoveryFailed,
+					"no OCI repository resolved for live attestation discovery; v0.1 does not yet scope the registry client to the per artifact repository AttestationRef computes (see sns45/smithmark#4). Pass --bundle to verify an explicit bundle, or wait for M6 live wiring")
+			}
 			return remote.NewRepository(repo)
 		},
 		Now:    time.Now,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/memory"
@@ -92,15 +94,30 @@ func npmMissingTransport(t *testing.T) *verifyFixtureTransport {
 	return tr
 }
 
+// poisonRoundTripper fails the test on any HTTP request. verifyDeps installs it
+// as the default Transport so a test that reaches the npm or MCP Registry
+// network without deliberately injecting a fixture transport fails loudly at the
+// request rather than possibly touching a real socket. It mirrors
+// pkg/discover's own poisonTransport. A test that needs a real fixture
+// transport overrides d.Transport, replacing this guard.
+type poisonRoundTripper struct{ t *testing.T }
+
+func (p poisonRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	p.t.Fatalf("poisonRoundTripper: unexpected request %s %s; inject a fixture transport for this test", req.Method, req.URL.String())
+	return nil, fmt.Errorf("unreachable")
+}
+
 // verifyDeps builds a deps value with a real signature verifier and the fixed
-// clock, writing to the supplied buffers. Discovery seams (Transport, Registry,
-// ReadTarget) default to nil and are set by the tests that need them.
+// clock, writing to the supplied buffers. Transport defaults to a poison round
+// tripper that fails the test on any request; Registry and ReadTarget default to
+// nil. Tests that discover over the network override these.
 func verifyDeps(t *testing.T, stdout, stderr *bytes.Buffer) *deps {
 	t.Helper()
 	return &deps{
 		Signer:    fakeSigner{},
 		NewTarget: failingTarget(t),
 		Verifier:  compose.NewVerifier(),
+		Transport: poisonRoundTripper{t: t},
 		Now:       func() time.Time { return fixedNow },
 		Stdout:    stdout,
 		Stderr:    stderr,
@@ -137,6 +154,13 @@ func decodeReport(t *testing.T, stdout []byte) *verify.VerificationReport {
 // local skill directory, the bundle bytes come from the flag, the injected
 // verifier checks the real signature, and the JSON report (evidence populated)
 // is pinned as a golden. It exits 0 because every failing class check passes.
+//
+// This golden embeds the winning bundle's DSSE envelope bytes, so it is coupled
+// to the committed skill/valid.sigstore.json fixture: regenerating the signed
+// fixtures (go run ./testdata/gen) reshuffles the randomized ECDSA signature and
+// therefore the envelope this golden pins, so on any real fixture payload change
+// this golden must be regenerated in the same commit with
+// `go test -update ./cmd/smithmark`.
 func TestVerifyValidSkillBundleGolden(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	d := verifyDeps(t, &stdout, &stderr)
@@ -229,6 +253,76 @@ func TestVerifyMissingAttestationExitsOne(t *testing.T) {
 	}
 }
 
+// TestVerifyMissingAttestationSummarySurfacesNote proves summary mode surfaces
+// discovery notes on stderr: the same missing attestation case as
+// TestVerifyMissingAttestationExitsOne, run in summary mode, carries the probed
+// attestation tag note as a "note:" line on stderr while stdout stays the
+// report. json mode surfaces nothing there (that path is pinned by the golden).
+func TestVerifyMissingAttestationSummarySurfacesNote(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+	d.Transport = npmMissingTransport(t)
+	store := memory.New()
+	d.ReadTarget = func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return store, nil }
+
+	code := runMain(d, []string{
+		"verify", verifyFixtureNPMName + "@" + verifyFixtureNPMVersion,
+		"--attestation-base", verifyTestAttestBase,
+		"--output", "summary",
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "note:") {
+		t.Errorf("stderr carries no note line:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "no attestation tag") {
+		t.Errorf("stderr does not carry the probed attestation tag note:\n%s", stderr.String())
+	}
+}
+
+// TestVerifyInvalidOutputExitsThree proves an unrecognized --output value fails
+// closed with exit 3 and the OUTPUT_FORMAT_INVALID code naming the valid values,
+// rather than silently defaulting to the human summary.
+func TestVerifyInvalidOutputExitsThree(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+
+	code := runMain(d, []string{
+		"verify", skillFixturePath,
+		"--bundle", skillValidBundlePath,
+		"--trust-root", trustRootPath,
+		"--output", "yaml",
+	})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.OutputFormatInvalid {
+		t.Errorf("code = %q, want %q", line.Code, codes.OutputFormatInvalid)
+	}
+	if !strings.Contains(line.Detail, "summary") || !strings.Contains(line.Detail, "json") {
+		t.Errorf("detail %q should name both valid values", line.Detail)
+	}
+}
+
+// TestProductionReadTargetEmptyRepoFailsClosed proves the production ReadTarget
+// factory fails closed with a coded DISCOVERY_FAILED when the resolved
+// repository is empty, rather than handing remote.NewRepository an empty string
+// and surfacing an uncoded INTERNAL_ERROR. The live per artifact scoping this
+// stands in for is tracked in sns45/smithmark#4 and lands with M6; no memory
+// store test can catch this because it exercises the production factory itself.
+func TestProductionReadTargetEmptyRepoFailsClosed(t *testing.T) {
+	_, err := productionDeps().ReadTarget(context.Background(), "")
+	if err == nil {
+		t.Fatal("ReadTarget returned no error for an empty repository")
+	}
+	var coded *codes.Error
+	if !errors.As(err, &coded) || coded.Code != codes.DiscoveryFailed {
+		t.Errorf("err = %v, want a %s coded error", err, codes.DiscoveryFailed)
+	}
+}
+
 // TestVerifyDiscoveryFailedExitsThree proves an operational discovery failure (a
 // malformed attestation base whose path segment violates the OCI grammar) exits
 // 3 with the single DISCOVERY_FAILED stderr line.
@@ -315,6 +409,25 @@ func TestVerifyStrictZeroFindingsExitsZero(t *testing.T) {
 	})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+}
+
+// TestTruncateDetailRuneSafety proves truncateDetail counts runes, not bytes: a
+// multi byte string truncated at the boundary stays valid UTF-8 and never splits
+// a rune, matching the doc comment's "at most max runes" promise.
+func TestTruncateDetailRuneSafety(t *testing.T) {
+	// Ten 3 byte runes (30 bytes). Truncating to 8 runes must yield 5 runes plus
+	// the "..." ellipsis, all valid UTF-8, never a byte split mid rune.
+	s := strings.Repeat("あ", 10)
+	got := truncateDetail(s, 8)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncateDetail produced invalid UTF-8: %q", got)
+	}
+	if n := utf8.RuneCountInString(got); n > 8 {
+		t.Errorf("truncateDetail returned %d runes, want at most 8", n)
+	}
+	if want := strings.Repeat("あ", 5) + "..."; got != want {
+		t.Errorf("truncateDetail = %q, want %q", got, want)
 	}
 }
 

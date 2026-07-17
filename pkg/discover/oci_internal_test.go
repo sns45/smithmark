@@ -5,9 +5,9 @@ import "testing"
 // TestLooksLikeOCIRef pins the shape detection controller resolution 3
 // describes: a slash plus a colon beyond any scheme prefix, or a slash plus
 // an "@algo:hex" digest suffix, marks arg as an OCI reference rather than an
-// npm "name@version" argument. Scoped npm arguments deliberately share the
-// slash-plus-"@" shape but never carry a colon or a digest suffix, so they
-// must not be misclassified.
+// npm "name@version" argument. Scoped npm arguments deliberately share that
+// same shape of a slash together with an "@" but never carry a colon or a
+// digest suffix, so they must not be misclassified.
 func TestLooksLikeOCIRef(t *testing.T) {
 	cases := []struct {
 		arg  string

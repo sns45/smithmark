@@ -12,22 +12,58 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/sns45/smithmark/pkg/core/codes"
 	"github.com/sns45/smithmark/pkg/core/manifest"
+	"github.com/sns45/smithmark/pkg/core/verify"
 )
 
 // defaultNPMRegistry is the base URL Resolve talks to when
 // ResolveOptions.Registry is left empty.
 const defaultNPMRegistry = "https://registry.npmjs.org"
 
-// npmProvenancePredicateType identifies npm's own SLSA provenance attestation
-// among the (possibly several) entries the npm attestations endpoint
-// returns. A publish attestation carries a different predicateType and is
-// deliberately not what Discovered.NPMProvenance names: that field is npm's
-// provenance specifically, not every attestation npm happens to hold.
-const npmProvenancePredicateType = "https://slsa.dev/provenance/v1"
+// maxRegistryResponseBytes caps how many bytes any single npm or MCP Registry
+// response body this package reads: 32 MiB, comfortably above any real
+// packument, attestations response, or registry entry, but bounded so a hostile
+// or misbehaving endpoint cannot exhaust memory by streaming an unbounded body.
+// It is shared by every response read here (fetchPackument, fetchNPMProvenance,
+// and registry.go's FetchRegistryEntry) through readCapped.
+const maxRegistryResponseBytes = 32 << 20
+
+// readCapped reads from r up to maxRegistryResponseBytes and returns the bytes,
+// treating a body that would exceed the cap as a DISCOVERY_FAILED failure rather
+// than silently truncating it: a truncated body could decode into a different,
+// attacker chosen shape. It reads one byte past the cap so the overflow is
+// detected rather than masked by the limit landing exactly on the boundary.
+func readCapped(r io.Reader, what string) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxRegistryResponseBytes+1))
+	if err != nil {
+		return nil, codes.E(codes.DiscoveryFailed, "reading %s: %v", what, err)
+	}
+	if int64(len(body)) > maxRegistryResponseBytes {
+		return nil, codes.E(codes.DiscoveryFailed,
+			"reading %s: response body exceeds the %d byte cap", what, maxRegistryResponseBytes)
+	}
+	return body, nil
+}
+
+// escapePackagePath percent encodes each slash separated segment of an npm
+// package name for use as a URL path, keeping the scope separator slash literal
+// (npm's packument and attestations endpoints expect .../@scope/name, a real
+// slash between the two segments) while escaping any reserved character inside a
+// segment. This stops a hostile name carrying a '?' or '#' from truncating the
+// request path into a query or fragment and silently fetching a different
+// resource; url.PathEscape leaves an ordinary scoped name's '@' and its
+// segments untouched, so the common case still routes byte for byte.
+func escapePackagePath(name string) string {
+	segs := strings.Split(name, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
+}
 
 // packument is the shape this package decodes an npm packument into. A
 // packument is a foreign, community owned format npm controls the schema of,
@@ -106,8 +142,8 @@ func httpClient(opts ResolveOptions) *http.Client {
 // attestations endpoint, a packument is not optional metadata, so there is
 // no tolerated absence here.
 func fetchPackument(ctx context.Context, opts ResolveOptions, name string) (*packument, error) {
-	url := fmt.Sprintf("%s/%s", registryBase(opts), name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL := fmt.Sprintf("%s/%s", registryBase(opts), escapePackagePath(name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, codes.E(codes.DiscoveryFailed, "building packument request for %s: %v", name, err)
 	}
@@ -120,9 +156,9 @@ func fetchPackument(ctx context.Context, opts ResolveOptions, name string) (*pac
 		return nil, codes.E(codes.DiscoveryFailed, "fetching packument for %s: unexpected status %s", name, resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, fmt.Sprintf("packument body for %s", name))
 	if err != nil {
-		return nil, codes.E(codes.DiscoveryFailed, "reading packument body for %s: %v", name, err)
+		return nil, err
 	}
 	var pkg packument
 	if err := json.Unmarshal(body, &pkg); err != nil {
@@ -202,14 +238,19 @@ func resolveNPMIdentity(ctx context.Context, name, version string, opts ResolveO
 }
 
 // fetchNPMProvenance GETs npm's own attestations endpoint for name@version
-// and, when the response carries an entry whose predicateType is npm's SLSA
-// provenance predicate, returns that entry's raw bundle bytes. A 404 is
-// tolerated (most packages carry no provenance at all) and recorded as a
-// note, not an error; any other unexpected status, transport error, or
-// undecodable body is DISCOVERY_FAILED.
+// and, when the response carries an entry whose predicateType is in the SLSA
+// provenance family, returns that entry's raw bundle bytes. Selection keys off
+// verify.SLSAProvenancePrefix, the exact same prefix the verify core's
+// PROVENANCE_PRESENT check uses, so discovery and verification can never drift
+// onto different predicate families and a newer provenance version (v2 and
+// beyond) is still selected. A publish attestation carries a predicateType
+// outside that family and is deliberately not what Discovered.NPMProvenance
+// names. A 404 is tolerated (most packages carry no provenance at all) and
+// recorded as a note, not an error; any other unexpected status, transport
+// error, or undecodable body is DISCOVERY_FAILED.
 func fetchNPMProvenance(ctx context.Context, opts ResolveOptions, name, version string) ([]byte, []string, error) {
-	url := fmt.Sprintf("%s/-/npm/v1/attestations/%s@%s", registryBase(opts), name, version)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL := fmt.Sprintf("%s/-/npm/v1/attestations/%s@%s", registryBase(opts), escapePackagePath(name), url.PathEscape(version))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, nil, codes.E(codes.DiscoveryFailed, "building npm provenance request for %s@%s: %v", name, version, err)
 	}
@@ -226,16 +267,16 @@ func fetchNPMProvenance(ctx context.Context, opts ResolveOptions, name, version 
 		return nil, nil, codes.E(codes.DiscoveryFailed, "fetching npm provenance for %s@%s: unexpected status %s", name, version, resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, fmt.Sprintf("npm provenance response for %s@%s", name, version))
 	if err != nil {
-		return nil, nil, codes.E(codes.DiscoveryFailed, "reading npm provenance response for %s@%s: %v", name, version, err)
+		return nil, nil, err
 	}
 	var parsed npmAttestationsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, nil, codes.E(codes.DiscoveryFailed, "decoding npm provenance response for %s@%s: %v", name, version, err)
 	}
 	for _, a := range parsed.Attestations {
-		if a.PredicateType == npmProvenancePredicateType {
+		if strings.HasPrefix(a.PredicateType, verify.SLSAProvenancePrefix) {
 			return []byte(a.Bundle), []string{notef(NoteProvenanceFound, "found npm provenance attestation for %s@%s", name, version)}, nil
 		}
 	}

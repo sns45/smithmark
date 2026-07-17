@@ -11,6 +11,13 @@
 // artifact kind rides along in SignatureNote prose as a shim this test also
 // pins; the M5 gh issue (Task 5.4) removes both the pin's need for a shim and
 // this comment once assayward's Evidence widens to accept a kind directly.
+//
+// Caveat: the drift alarm is one directional. It catches a field smithmark
+// emits that assayward v0.1.0 does not expect (strict decode rejects it), but
+// not the reverse: a field assayward adds that smithmark never emits decodes
+// silently into a zero value here and raises nothing. Closing that gap needs an
+// explicit schemaVersion on Evidence so a consumer can pin and detect either
+// direction of drift; that is the second request in the Task 5.4 M5 issue.
 package verify_test
 
 import (
@@ -201,6 +208,11 @@ func TestEvidenceBlockRejectsSubjectWithoutExactlyOneDigest(t *testing.T) {
 	report.Subject.Digest = manifest.DigestSet{"sha256": "aa", "sha512": "bb"}
 	if _, err := report.EvidenceBlock(bundleBytes); err == nil {
 		t.Error("EvidenceBlock did not error on a subject with two digests")
+	} else {
+		var coded *codes.Error
+		if !errors.As(err, &coded) || coded.Code != codes.StatementSubjectInvalid {
+			t.Errorf("error = %v, want a %s coded error", err, codes.StatementSubjectInvalid)
+		}
 	}
 }
 

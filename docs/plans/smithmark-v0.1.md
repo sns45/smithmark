@@ -1126,9 +1126,10 @@ Implements spec §3 rules, §5 verify semantics, U3. **Files:** create `pkg/core
 
 ```go
 type CheckResult struct {
-	Code   string `json:"code"`
-	Passed bool   `json:"passed"`
-	Detail string `json:"detail,omitempty"`
+	Code          string `json:"code"`
+	Passed        bool   `json:"passed"`
+	Informational bool   `json:"informational,omitempty"` // never drives an exit code; policy consumes it
+	Detail        string `json:"detail,omitempty"`
 }
 type VerificationReport struct {
 	Subject    manifest.ArtifactRef `json:"subject"`
@@ -1141,14 +1142,14 @@ type Input struct {
 	Ref           manifest.ArtifactRef
 	Bundles       [][]byte
 	NPMProvenance []byte
-	TrustRoots    []byte    // sigstore TUF root, injected
+	TrustMaterial []byte    // PEM public key for key based bundles; the Sigstore TUF root form lands in M6
 	Now           time.Time // injected clock
 }
 // SignatureVerifier abstracts sigstore-go so core stays buildable everywhere;
-// pkg/compose provides the native implementation behind the build tag and a
-// fail closed stub elsewhere (spec 2.1).
+// pkg/compose provides the native implementation behind the !wasip1 build tag
+// and a fail closed stub under wasip1 (spec 2.1).
 type SignatureVerifier interface {
-	VerifyBundle(bundle, trustRoots []byte, now time.Time) (statementBytes []byte, rekorIncluded bool, err error)
+	VerifyBundle(bundle, trustMaterial []byte, now time.Time) (statementBytes []byte, rekorIncluded bool, err error)
 }
 func Run(in Input, sv SignatureVerifier) (*VerificationReport, error)
 ```
@@ -1264,7 +1265,7 @@ Implements spec §7 first bullet and U5, via direct `gh` execution:
 ```bash
 gh issue create --repo sns45/assayward \
   --title "Widen ImageRef to a kind tagged ArtifactRef and version the Evidence schema" \
-  --body "smithmark emits Evidence for agent artifacts (MCP servers, skills). Two requests for vNext: (1) widen ImageRef to ArtifactRef{Kind, Name, Version, Digest, Source} so non image subjects are first class; (2) add an explicit schemaVersion field to Evidence so cross repo consumers can pin and detect drift. Context: smithmark requirements.md section 7 and docs/decisions.md U5. smithmark currently pins the assayward module version in its contract test and shims kind into SignatureNote; both are removed when this lands."
+  --body "smithmark emits Evidence for agent artifacts (MCP servers, skills). Two requests for vNext: (1) widen ImageRef to ArtifactRef{Kind, Name, Version, Digest, Source} so non image subjects are first class; (2) add an explicit schemaVersion field to Evidence so cross repo consumers can pin and detect drift. Context: smithmark requirements.md section 7 and docs/decisions.md U5. smithmark currently pins the assayward module version in its contract test and shims kind into SignatureNote; both are removed when this lands. Also note: assayward's VerifySLSA currently strips the sha256: prefix unconditionally; smithmark skill subjects carry a smithmark-bundle-v1: prefixed digest, so ArtifactRef work must include digest algorithm awareness."
 ```
 
 **Verification:** issue URL recorded in `docs/decisions.md` under U5. Commit the docs update.

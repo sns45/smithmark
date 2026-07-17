@@ -24,6 +24,8 @@ Evidence: forgeseal exports no packages (all logic sits under `internal/`), so a
 
 Note: `attest --output` writes the raw SBOM as an `<output>.sbom.json` sidecar and stamps that filename as the manifest's dependencies locator before signing; the push path leaves the locator empty for now. SBOM publication and locator assignment for the push path land with M3 discovery or M6 release wiring.
 
+Amendment 2026-07-17: M3 discovery ships the SBOM reference presence check only (`DEPENDENCY_SBOM_MISSING`, informational). SBOM locator assignment for the push path and sidecar SBOM discovery both land with the M6 release wiring, deliberately, not in M3.
+
 **Follow up**: file a gh issue on `sns45/forgeseal` requesting an exported `pkg/sbom` facade over `internal/sbom.Generator` plus lockfile detection. File it when the adapter lands in M2. Filed: https://github.com/sns45/forgeseal/issues/26
 
 ## D3: Deterministic OCI attestation ref scheme (spec §6, §13 Q3) — NORMATIVE, feeds the registry RFC
@@ -45,6 +47,8 @@ oci:    native referrers API on the image digest; no mapping
 
 Amendment 2026-07-16: digest values must be exact length for the mapping (npm sha512 exactly 128 hex, pypi and skill digests exactly 64); wrong lengths are REF_UNMAPPABLE, never truncated or padded.
 
+Amendment 2026-07-17 (live OCI scoping deferred): M3 exercises attestation discovery against an injected oras target with an in memory store; the live registry client is not yet scoped to the per artifact repository `AttestationRef` computes. `discoverByTag` keeps only the tag half of the `(repository, tag)` pair, and the CLI builds its read target from the raw `--attestation-base` flag rather than resolving it through `ResolveAttestationBase`. When the base resolves to empty, the production read target factory now fails closed with a coded `DISCOVERY_FAILED` naming the limitation instead of an uncoded `INTERNAL_ERROR`. No memory store test can catch the scoping gap, so the full live wiring lands with the M6 dogfood, the first live consumer. Tracked: https://github.com/sns45/smithmark/issues/4
+
 ## D4: `verify --strict` semantics and exit codes (spec §5, §13 Q4) — exit codes are API
 
 Default is pure verify: lint findings never fail the command. `--strict` additionally fails on findings whose code matches `UNDECLARED_*`, and nothing else.
@@ -59,6 +63,10 @@ Exit codes, documented and stable:
 | 3 | operational error (network, missing forgeseal, unusable config) |
 
 **Why**: CI and the Claude Code hook must distinguish "artifact is bad" from "I could not check".
+
+Amendment 2026-07-17 (two class check design): verification checks fall in two classes. A failing class check drives the nonzero verify exit code (the table above) when it fails; an informational check is marked `informational` in the report, never drives an exit code, and is left for downstream policy such as assayward to weigh. The classification is authored in exactly one place, `pkg/core/verify`, and documented per code in `docs/codes.md`; the exported `FailingChecksFailed` helper is the single authority every exit mapping keys off, so a false informational check (a key based offline bundle's absent Rekor entry, or the npm interop checks) never rejects a valid artifact.
+
+Amendment 2026-07-17 (v0.1 verification scope): v0.1 verifies key based offline bundles against a PEM public key only. There is no transparency log to consult offline, so `REKOR_INCLUSION_VALID` reports an informational false for these bundles rather than a failure. Keyless certificate verification (Fulcio, the Sigstore TUF trust root), transparency log inclusion proofs, and cryptographic verification of npm's own SLSA provenance (`NPM_PROVENANCE_VERIFIED`) are all accepted as inputs but report as not attempted; they land, exercised live, in M6.
 
 ## D5: Hosted/SSE MCP servers deferred to phase 2 (spec §13 Q5)
 

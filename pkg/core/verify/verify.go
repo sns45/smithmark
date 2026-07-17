@@ -1,7 +1,7 @@
 // Package verify is the pure verification core (spec 3 rules, spec 5 verify
 // semantics, open item U3). It is the single place check outcomes are decided:
-// spec 3's rule is that nothing downstream re-reads an envelope as trusted, so
-// every CheckResult in a VerificationReport is produced here and only here. The
+// spec 3's rule is that no downstream code reads an envelope back and trusts it,
+// so every CheckResult in a VerificationReport is produced here and only here. The
 // package is pure in the pkg/core sense: it imports no I/O, bundles arrive as
 // bytes the caller already fetched, the verification clock is injected as
 // in.Now, and all signature cryptography is delegated to an injected
@@ -98,9 +98,10 @@ type Input struct {
 }
 
 // SignatureVerifier abstracts the sigstore stack so the pure core stays
-// buildable everywhere. pkg/compose provides the native implementation behind
-// the wasip1 build tag and a fail closed stub elsewhere (spec 2.1). Run never
-// imports pkg/compose; the CLI wires an implementation in.
+// buildable everywhere. pkg/compose provides the native implementation
+// everywhere except wasip1 (behind the !wasip1 build tag) and a fail closed
+// stub under wasip1, where the sigstore stack does not compile (spec 2.1). Run
+// never imports pkg/compose; the CLI wires an implementation in.
 type SignatureVerifier interface {
 	// VerifyBundle checks the bundle signature against trust material and
 	// returns the DSSE payload statement bytes plus whether a transparency
@@ -134,9 +135,18 @@ func Run(in Input, sv SignatureVerifier) (*VerificationReport, error) {
 	n := len(in.Bundles)
 	if n == 0 {
 		// Presence stage, U3: no bundle fails ATTESTATION_MISSING and short
-		// circuits, marking every remaining check not evaluated. No candidate is
-		// reflected, so there is no winning bundle.
-		report.Checks = sortChecks(missingAttestationChecks())
+		// circuits, marking every bundle derived check not evaluated. No candidate
+		// is reflected, so there is no winning bundle. The two npm provenance
+		// checks are the exception: provenance is a separate, input driven signal
+		// from any primary attestation bundle, so PROVENANCE_PRESENT and
+		// NPM_PROVENANCE_VERIFIED are still evaluated against in.NPMProvenance
+		// here (both informational, so neither drives an exit code either way).
+		checks := missingAttestationChecks()
+		set := func(code string, passed, informational bool, detail string) {
+			checks[code] = CheckResult{Code: code, Passed: passed, Informational: informational, Detail: detail}
+		}
+		evalProvenance(in, set)
+		report.Checks = sortChecks(checks)
 		report.WinningBundle = -1
 		return report, nil
 	}
@@ -224,12 +234,17 @@ type evidenceBlock struct {
 // from bundle's protojson dsseEnvelope field, and Verified is the
 // SIGNATURE_VALID outcome Run already decided, never reevaluated here.
 // FetchedAt is r.VerifiedAt, the injected clock, never the wall clock.
+//
+// The same M5 issue must also make assayward digest algorithm aware: its
+// VerifySLSA strips a "sha256:" prefix from ImageRef.Digest unconditionally,
+// which would mangle the "smithmark-bundle-v1:" prefixed skill digest this
+// block carries (see singleDigest); the Task 5.4 issue names that landmine.
 func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, error) {
 	digest, err := singleDigest(r.Subject.Digest)
 	if err != nil {
 		return nil, err
 	}
-	envelope, err := extractDSSEEnvelope(bundle)
+	parts, err := extractDSSEParts(bundle)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +266,7 @@ func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, erro
 		},
 		Attestations: []evidenceAttestation{{
 			PredicateType: manifest.PredicateType,
-			Envelope:      envelope,
+			Envelope:      []byte(parts.envelope),
 			Verified:      verified,
 			SignatureNote: note,
 		}},
@@ -266,6 +281,12 @@ func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, erro
 // keys is the subject's own shape being wrong for this purpose, not an
 // internal failure, so it is coded STATEMENT_SUBJECT_INVALID rather than
 // InternalError.
+//
+// Landmine to retire in M5: assayward's VerifySLSA strips a "sha256:" prefix
+// from ImageRef.Digest unconditionally. A skill subject carries a
+// "smithmark-bundle-v1:" prefixed digest, so that prefix must be preserved and
+// understood by any consumer; the Task 5.4 assayward issue asks for digest
+// algorithm awareness so this prefix is never silently trimmed or mishandled.
 func singleDigest(d manifest.DigestSet) (string, error) {
 	if len(d) != 1 {
 		return "", codes.E(codes.StatementSubjectInvalid,
@@ -286,23 +307,49 @@ func validityWord(verified bool) string {
 	return "invalid"
 }
 
-// extractDSSEEnvelope extracts the dsseEnvelope object of a protojson
-// sigstore bundle as raw JSON bytes, using the same lenient field surgery
-// provenancePredicateType uses for npm provenance below: locating the
-// envelope object embedded in the bundle's own JSON needs no protobuf types
-// and no cryptography, so it stays inside the purity guard without an extra
-// interface hop through SignatureVerifier.
-func extractDSSEEnvelope(bundleBytes []byte) ([]byte, error) {
+// dsseParts holds the two projections of a protojson sigstore bundle's
+// dsseEnvelope that this package needs: the raw envelope object (EvidenceBlock
+// carries it verbatim into the Evidence block) and its decoded DSSE payload
+// bytes (provenancePredicateType reads the enveloped statement's
+// predicateType). payload is nil when the envelope carries no payload field.
+type dsseParts struct {
+	envelope json.RawMessage
+	payload  []byte
+}
+
+// extractDSSEParts performs the single lenient field walk both EvidenceBlock and
+// provenancePredicateType rely on: it locates the dsseEnvelope object embedded
+// in a bundle's own JSON and, when a payload field is present, base64 decodes
+// it. This needs no protobuf types and no cryptography, so it stays inside the
+// pkg/core purity guard without an extra interface hop through
+// SignatureVerifier. The gen kit's tamperSignature (testdata/gen/gen.go) does
+// the same untyped walk over the signatures array for a different purpose; this
+// is its typed twin here.
+func extractDSSEParts(bundleBytes []byte) (dsseParts, error) {
 	var doc struct {
 		DSSEEnvelope json.RawMessage `json:"dsseEnvelope"`
 	}
 	if err := json.Unmarshal(bundleBytes, &doc); err != nil {
-		return nil, fmt.Errorf("decoding bundle JSON: %w", err)
+		return dsseParts{}, fmt.Errorf("decoding bundle JSON: %w", err)
 	}
 	if len(doc.DSSEEnvelope) == 0 {
-		return nil, errors.New("bundle carries no dsseEnvelope object")
+		return dsseParts{}, errors.New("bundle carries no dsseEnvelope object")
 	}
-	return []byte(doc.DSSEEnvelope), nil
+	var inner struct {
+		Payload string `json:"payload"`
+	}
+	if err := json.Unmarshal(doc.DSSEEnvelope, &inner); err != nil {
+		return dsseParts{}, fmt.Errorf("decoding DSSE envelope: %w", err)
+	}
+	parts := dsseParts{envelope: doc.DSSEEnvelope}
+	if inner.Payload != "" {
+		payload, err := base64.StdEncoding.DecodeString(inner.Payload)
+		if err != nil {
+			return dsseParts{}, fmt.Errorf("decoding DSSE payload as base64: %w", err)
+		}
+		parts.payload = payload
+	}
+	return parts, nil
 }
 
 // evaluateCandidate runs the full stage pipeline for a single bundle and
@@ -467,6 +514,14 @@ func attestationPresentResult(n, selectedIdx int, passed bool) CheckResult {
 // must match; a differing key set or a differing value is a failure whose
 // detail names both sets in full, so a caller sees exactly what was expected
 // against what was attested.
+//
+// The check is deliberately exact today. Should it ever be relaxed, the only
+// safe direction is to require the expected set to be a subset of the attested
+// set: every algorithm the caller expects must be attested with a matching
+// value. Accepting mere overlap (a single matching algorithm among several
+// expected, or among several attested) must never be the rule, since an
+// attacker who controls one weak or colliding algorithm could satisfy the
+// check while the strong digest the caller cares about disagrees.
 func digestMatch(expected, attested manifest.DigestSet) (string, bool) {
 	if sameKeys(expected, attested) {
 		mismatch := false
@@ -591,11 +646,18 @@ func unsupportedDistributionDetail(packageTypes []string) string {
 		strings.Join(packageTypes, ", "))
 }
 
-// predicateParseDetail distinguishes the two causes PREDICATE_VERSION_UNSUPPORTED
-// covers: an unknown predicateType, which ParseStatement names explicitly, and
-// any other strict parse failure of the predicate, which stands in for a
-// predicate schema this build cannot structurally understand.
+// predicateParseDetail distinguishes the causes PREDICATE_VERSION_UNSUPPORTED
+// covers: a statement missing exactly one valid subject (framed as a subject
+// problem, keyed on the wrapped STATEMENT_SUBJECT_INVALID code rather than on
+// message text so the framing never drifts with wording), an unknown
+// predicateType, which ParseStatement names explicitly, and any other strict
+// parse failure of the predicate, which stands in for a predicate schema this
+// build cannot structurally understand.
 func predicateParseDetail(err error) string {
+	var coded *codes.Error
+	if errors.As(err, &coded) && coded.Code == codes.StatementSubjectInvalid {
+		return fmt.Sprintf("the attestation statement does not carry exactly one valid subject: %v", err)
+	}
 	if strings.Contains(err.Error(), "predicateType") {
 		return fmt.Sprintf("the attestation predicate type is not one this build understands: %v", err)
 	}
@@ -604,30 +666,22 @@ func predicateParseDetail(err error) string {
 
 // provenancePredicateType extracts the predicateType of an npm provenance
 // bundle's enveloped in-toto statement using only the standard library: it
-// reads the bundle's DSSE payload (base64 in protojson), decodes it, and reads
-// the statement's predicateType. This needs no protobuf types and no
-// cryptography, so provenance presence detection stays inside the pkg/core
-// purity guard without an extra interface hop through the SignatureVerifier.
+// reuses extractDSSEParts to reach the decoded DSSE payload, then reads the
+// statement's predicateType. This needs no protobuf types and no cryptography,
+// so provenance presence detection stays inside the pkg/core purity guard
+// without an extra interface hop through the SignatureVerifier.
 func provenancePredicateType(raw []byte) (string, error) {
-	var envelope struct {
-		DSSEEnvelope struct {
-			Payload string `json:"payload"`
-		} `json:"dsseEnvelope"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return "", fmt.Errorf("decoding bundle JSON: %w", err)
-	}
-	if envelope.DSSEEnvelope.Payload == "" {
-		return "", errors.New("bundle carries no DSSE envelope payload")
-	}
-	payload, err := base64.StdEncoding.DecodeString(envelope.DSSEEnvelope.Payload)
+	parts, err := extractDSSEParts(raw)
 	if err != nil {
-		return "", fmt.Errorf("decoding DSSE payload as base64: %w", err)
+		return "", err
+	}
+	if len(parts.payload) == 0 {
+		return "", errors.New("bundle carries no DSSE envelope payload")
 	}
 	var statement struct {
 		PredicateType string `json:"predicateType"`
 	}
-	if err := json.Unmarshal(payload, &statement); err != nil {
+	if err := json.Unmarshal(parts.payload, &statement); err != nil {
 		return "", fmt.Errorf("decoding enveloped in-toto statement: %w", err)
 	}
 	if statement.PredicateType == "" {
@@ -636,16 +690,18 @@ func provenancePredicateType(raw []byte) (string, error) {
 	return statement.PredicateType, nil
 }
 
-// slsaProvenancePrefix is the URI prefix that identifies the SLSA provenance
+// SLSAProvenancePrefix is the URI prefix that identifies the SLSA provenance
 // predicate family (for example .../provenance/v1). PROVENANCE_PRESENT accepts
-// any version within it, matching how discovery selects npm's provenance among
-// the attestations npm returns.
-const slsaProvenancePrefix = "https://slsa.dev/provenance/"
+// any version within it. It is exported so pkg/discover's fetchNPMProvenance
+// selects npm's provenance among the attestations npm returns by this exact
+// same prefix, which means the presence check decided here and discovery's own
+// selection can never drift onto different predicate families.
+const SLSAProvenancePrefix = "https://slsa.dev/provenance/"
 
 // isSLSAProvenance reports whether a predicate type is in the SLSA provenance
 // family.
 func isSLSAProvenance(predicateType string) bool {
-	return strings.HasPrefix(predicateType, slsaProvenancePrefix)
+	return strings.HasPrefix(predicateType, SLSAProvenancePrefix)
 }
 
 // isConfigError reports whether err is a coded configuration or platform

@@ -96,6 +96,9 @@ func newVerifyCmd(d *deps) *cobra.Command {
 // writes its report to stdout and returns a *verifyExit carrying the classified
 // exit code, so a negative verdict is never confused with an operational error.
 func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error {
+	if err := validateOutputFormat(o.output); err != nil {
+		return err
+	}
 	// Keyless verification is accepted but fails closed in v0.1: the cosign
 	// certificate flags are recognized so a caller's invocation is not rejected
 	// as unknown, but honoring them needs the Sigstore TUF trust root, which
@@ -115,6 +118,10 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 		return err
 	}
 
+	// Surface discovery notes on stderr (summary mode only) so a human sees which
+	// resolution path ran and why, while stdout stays a clean, parseable report.
+	writeDiscoveryNotes(d.Stderr, disc.Notes, o.output)
+
 	code := verifyExitCode(report, o.strict)
 	if err := writeReport(d.Stdout, report, o.output, code); err != nil {
 		return err
@@ -123,6 +130,34 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 		return nil
 	}
 	return &verifyExit{code: code}
+}
+
+// validateOutputFormat rejects an --output value other than the two this build
+// understands, failing closed with a coded error rather than silently treating
+// an unrecognized format as the human summary. Both verify and registry check
+// call it, so the two commands share one definition of the valid set.
+func validateOutputFormat(output string) error {
+	switch output {
+	case outputSummary, outputJSON:
+		return nil
+	default:
+		return codes.E(codes.OutputFormatInvalid,
+			"unknown --output value %q; valid values are %q and %q", output, outputSummary, outputJSON)
+	}
+}
+
+// writeDiscoveryNotes prints each discovery note to w (stderr) as a "note:"
+// line, but only outside json mode. Keeping notes on stderr leaves stdout a
+// clean, parseable report and the json golden untouched; json mode prints
+// nothing here, because surfacing notes as a report schema field is a
+// deliberate M4 decision, not something to smuggle into the json surface.
+func writeDiscoveryNotes(w io.Writer, notes []string, output string) {
+	if output == outputJSON {
+		return
+	}
+	for _, n := range notes {
+		fmt.Fprintf(w, "note: %s\n", n)
+	}
 }
 
 // discoverForVerification builds discover.ResolveOptions from the shared
@@ -270,7 +305,7 @@ func writeSummary(w io.Writer, report *verify.VerificationReport, code int) erro
 			fmt.Fprintf(&b, "%-4s  %-32s  %s\n", tag, c.Code, detail)
 		}
 	}
-	fmt.Fprintf(&b, "%s  %s\n", verdictWord(code), manifest.SubjectName(report.Subject))
+	fmt.Fprintf(&b, "%s  %s\n", verdictWord(code, report), manifest.SubjectName(report.Subject))
 	if _, err := io.WriteString(w, b.String()); err != nil {
 		return fmt.Errorf("verify: writing summary: %w", err)
 	}
@@ -279,10 +314,17 @@ func writeSummary(w io.Writer, report *verify.VerificationReport, code int) erro
 
 // verdictWord renders the exit code as the human verdict the summary ends with:
 // VERIFIED for a clean pass, FAILED for a failing class failure, and FLAGGED for
-// a strict mode UNDECLARED_ flag on an otherwise passing verification.
-func verdictWord(code int) string {
+// a strict mode UNDECLARED_ flag on an otherwise passing verification. A clean
+// exit 0 whose report ran no failing class check at all (every check is
+// informational, as for a remote only registry entry) is NOT EVALUATED rather
+// than VERIFIED: nothing was actually verified, so claiming a verified verdict
+// would overstate what happened.
+func verdictWord(code int, report *verify.VerificationReport) string {
 	switch code {
 	case 0:
+		if !anyFailingClassCheckRan(report) {
+			return "NOT EVALUATED"
+		}
 		return "VERIFIED"
 	case 2:
 		return "FLAGGED"
@@ -291,14 +333,30 @@ func verdictWord(code int) string {
 	}
 }
 
+// anyFailingClassCheckRan reports whether the report carries any failing class
+// (non informational) check. When it carries none, no failing class check ever
+// ran, so a clean exit reflects "nothing to verify" rather than a passed
+// verification.
+func anyFailingClassCheckRan(report *verify.VerificationReport) bool {
+	for _, c := range report.Checks {
+		if !c.Informational {
+			return true
+		}
+	}
+	return false
+}
+
 // truncateDetail shortens s to at most max runes, appending an ellipsis when it
-// had to cut, so the summary table stays one line per check.
+// had to cut, so the summary table stays one line per check. It counts and
+// slices by rune, never by byte, so a multi byte rune is never split into
+// invalid UTF-8 at the boundary.
 func truncateDetail(s string, max int) string {
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= max {
 		return s
 	}
 	if max <= 3 {
-		return s[:max]
+		return string(r[:max])
 	}
-	return s[:max-3] + "..."
+	return string(r[:max-3]) + "..."
 }

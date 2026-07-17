@@ -83,10 +83,11 @@ type Discovered struct {
 
 // Note prefixes: every entry Resolve appends to Discovered.Notes begins with
 // exactly one of these, followed by ": " and a human readable detail (see
-// notef below). They are exported and stable so a downstream caller, such as
-// Task 3.3's verification stage, can key off the prefix rather than parsing
-// prose, and so a later change to the wording after the colon never breaks
-// that caller.
+// notef below). They are exported and stable so a downstream caller can key off
+// the prefix rather than parsing prose. The consumer today is the CLI verify
+// command's summary surface (cmd/smithmark), which prints each note to stderr as
+// a "note:" line; keeping the prefix stable means a later change to the wording
+// after the colon never breaks a caller keying off the prefix.
 const (
 	// NoteExplicitBundle reports that opts.BundlePath was set, so Bundles
 	// came from that file and attestation discovery was skipped entirely.

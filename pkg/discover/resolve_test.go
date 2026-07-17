@@ -627,6 +627,44 @@ func TestResolveOCIRefUsesReferrers(t *testing.T) {
 	}
 }
 
+// TestResolveOCIRefReferrerCapRejectsFlood asserts discoverReferrers fails
+// closed when a subject carries more matching sigstore bundle referrers than
+// the candidate cap (16), rather than silently narrowing to a subset an
+// attacker who flooded the referrers graph could have chosen. Seventeen
+// distinct sigstore bundle referrers, one past the cap, must be a
+// DISCOVERY_FAILED error, not a truncated set of candidates.
+func TestResolveOCIRefReferrerCapRejectsFlood(t *testing.T) {
+	ctx := context.Background()
+	target := memory.New()
+	subjectBytes := []byte(emptyOCIManifestBytes)
+	subjectDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digestOf(subjectBytes),
+		Size:      int64(len(subjectBytes)),
+	}
+	if err := target.Push(ctx, subjectDesc, bytes.NewReader(subjectBytes)); err != nil {
+		t.Fatalf("pushing fabricated subject: %v", err)
+	}
+	if err := target.Tag(ctx, subjectDesc, "v1.0.0"); err != nil {
+		t.Fatalf("tagging fabricated subject: %v", err)
+	}
+	for i := 0; i < 17; i++ {
+		sb := &compose.SignedBundle{
+			Bundle:    []byte(fmt.Sprintf(`{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","n":%d}`, i)),
+			MediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+		}
+		if _, err := compose.AttachReferrer(ctx, target, subjectDesc, sb); err != nil {
+			t.Fatalf("AttachReferrer %d: %v", i, err)
+		}
+	}
+
+	_, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
+		Target:    target,
+	}))
+	assertCode(t, err, codes.DiscoveryFailed)
+}
+
 // TestResolveOCIRefNoMatchingReferrers asserts an OCI ref whose subject has no
 // referrers at all resolves successfully with zero bundles, not an error.
 func TestResolveOCIRefNoMatchingReferrers(t *testing.T) {

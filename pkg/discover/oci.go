@@ -28,6 +28,14 @@ import (
 // silently stop being discovered.
 const sigstoreBundleMediaTypePrefix = "application/vnd.dev.sigstore.bundle"
 
+// maxReferrerCandidates caps how many matching sigstore bundle referrers
+// discoverReferrers collects for one subject. More than this is treated as a
+// DISCOVERY_FAILED failure rather than silently narrowed to a subset: an
+// attacker who can flood a subject's referrers graph must not be able to force
+// discovery to consider only some of the candidates and quietly drop the rest,
+// so the fail closed response is to refuse the whole set and name the cap.
+const maxReferrerCandidates = 16
+
 // ociDigestSuffix matches an "@algo:hex" digest suffix, for example
 // "@sha256:deadbeef...", the shape an OCI reference uses in place of a tag.
 var ociDigestSuffix = regexp.MustCompile(`@[a-z0-9]+:[0-9a-f]{32,}$`)
@@ -119,9 +127,16 @@ func discoverReferrers(ctx context.Context, target oras.ReadOnlyGraphTarget, sub
 	}
 
 	var bundles [][]byte
+	matching := 0
 	for _, r := range referrers {
 		if !strings.HasPrefix(r.ArtifactType, sigstoreBundleMediaTypePrefix) {
 			continue
+		}
+		matching++
+		if matching > maxReferrerCandidates {
+			return nil, nil, codes.E(codes.DiscoveryFailed,
+				"subject %s carries %d referrers, more matching sigstore bundle candidates than the cap of %d; refusing to narrow to a subset",
+				subject.Digest, len(referrers), maxReferrerCandidates)
 		}
 		layers, err := fetchManifestLayers(ctx, target, r)
 		if err != nil {

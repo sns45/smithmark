@@ -65,6 +65,14 @@ changed. Commit the regeneration only when the payloads themselves needed to
 change; a routine rerun that changes nothing but signatures does not need to be
 committed.
 
+When you do regenerate for a real payload change, the `cmd/smithmark` verify
+golden (`cmd/smithmark/testdata/golden/verify_valid_skill.json`) embeds the
+winning bundle's DSSE envelope bytes, so it is coupled to the regenerated
+`skill/valid.sigstore.json` fixture. Regenerate it in the same commit with `go
+test -update ./cmd/smithmark`. The pure core golden
+(`pkg/core/verify/testdata/golden/report_valid.json`) carries no envelope
+(its evidence is `null`), so it is not coupled to the signature bytes.
+
 ## Fixture inventory
 
 For each of two subjects, five variants are generated:

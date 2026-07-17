@@ -300,6 +300,14 @@ func signOrDie(ctx context.Context, signer compose.Signer, stmt *manifest.Statem
 // signature, flips one byte of it, encodes it again, and marshals the bundle
 // back to JSON. The result is valid JSON with the payload untouched and only
 // the signature corrupted.
+//
+// This is an untyped map[string]any walk over the dsseEnvelope's signatures
+// array on purpose: it must mutate one field and serialize the rest again byte
+// for byte, which a typed protojson round trip would not preserve. Its
+// read only typed twin lives in pkg/core/verify.extractDSSEParts, which reaches
+// the same dsseEnvelope object to read (never mutate) the raw envelope and its
+// decoded payload; the gen kit keeps this untyped walk while EvidenceBlock and
+// provenancePredicateType share that core helper.
 func tamperSignature(validBundle []byte) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(validBundle, &doc); err != nil {
