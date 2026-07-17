@@ -318,7 +318,20 @@ func extractLiveTools(ctx context.Context, command []string) ([]manifest.ToolDec
 // independent (a server and a hand written file need not list tools in the same
 // order) and deterministic (names are compared in sorted order), so the same
 // mismatch always yields the same message.
+//
+// A duplicate tool name on EITHER side is itself a disagreement (M4): a well
+// formed MCP tools list has unique names, so a repeated name is a malformed
+// listing worth failing on, not a detail to collapse away. Both sides are
+// checked for duplicates before the set comparison, so a duplicate can never be
+// silently reconciled last wins and signed.
 func toolListingDisagreement(fileTools, liveTools []manifest.ToolDecl) string {
+	if dup := duplicateToolName(fileTools); dup != "" {
+		return fmt.Sprintf("--tools-from lists tool %q more than once; a well formed MCP tools list has unique names", dup)
+	}
+	if dup := duplicateToolName(liveTools); dup != "" {
+		return fmt.Sprintf("the live server lists tool %q more than once; a well formed MCP tools list has unique names", dup)
+	}
+
 	fileByName := indexToolsByName(fileTools)
 	liveByName := indexToolsByName(liveTools)
 
@@ -341,14 +354,36 @@ func toolListingDisagreement(fileTools, liveTools []manifest.ToolDecl) string {
 }
 
 // indexToolsByName keys a tool listing by tool name. A well formed MCP server
-// never lists a name twice; on the off chance a fixture does, the last entry
-// wins, which is immaterial to the disagreement check's fail closed purpose.
+// never lists a name twice, and toolListingDisagreement rejects any listing that
+// does (duplicateToolName) before calling this, so by the time indexing runs
+// every name is unique and no collapsing can hide a disagreement.
 func indexToolsByName(tools []manifest.ToolDecl) map[string]manifest.ToolDecl {
 	m := make(map[string]manifest.ToolDecl, len(tools))
 	for _, t := range tools {
 		m[t.Name] = t
 	}
 	return m
+}
+
+// duplicateToolName reports the first tool name (in sorted order, so the result
+// is deterministic) that appears more than once in tools, or "" when every name
+// is unique. A duplicate makes the whole listing malformed, so
+// toolListingDisagreement treats it as a fail closed disagreement rather than
+// collapsing it.
+func duplicateToolName(tools []manifest.ToolDecl) string {
+	seen := make(map[string]bool, len(tools))
+	var dups []string
+	for _, t := range tools {
+		if seen[t.Name] {
+			dups = append(dups, t.Name)
+		}
+		seen[t.Name] = true
+	}
+	if len(dups) == 0 {
+		return ""
+	}
+	sort.Strings(dups)
+	return dups[0]
 }
 
 // sortedToolNames returns the tool names in a listing index, sorted, so every

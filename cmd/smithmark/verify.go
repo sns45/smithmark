@@ -121,7 +121,7 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 
 	// Surface discovery notes on stderr (summary mode only) so a human sees which
 	// resolution path ran and why, while stdout stays a clean, parseable report.
-	writeDiscoveryNotes(d.Stderr, disc.Notes, o.output)
+	writeStderrNotes(d.Stderr, o.output == outputJSON, disc.Notes)
 
 	// Capability lint over the local source tree (decision D4 addendum). Only a
 	// local directory argument carries source to scan; a remote or bundle only
@@ -132,7 +132,7 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 	if err != nil {
 		return err
 	}
-	writeAdvisoryNotes(d.Stderr, lintNotes, o.output)
+	writeStderrNotes(d.Stderr, o.output == outputJSON, lintNotes)
 
 	code := verifyExitCode(report, o.strict)
 	if err := writeReport(d.Stdout, report, o.output, code); err != nil {
@@ -158,13 +158,16 @@ func validateOutputFormat(output string) error {
 	}
 }
 
-// writeDiscoveryNotes prints each discovery note to w (stderr) as a "note:"
-// line, but only outside json mode. Keeping notes on stderr leaves stdout a
-// clean, parseable report and the json golden untouched; json mode prints
-// nothing here, because surfacing notes as a report schema field is a
-// deliberate M4 decision, not something to smuggle into the json surface.
-func writeDiscoveryNotes(w io.Writer, notes []string, output string) {
-	if output == outputJSON {
+// writeStderrNotes prints each advisory or discovery note to w (stderr) as a
+// "note:" line, but only when jsonMode is false. Keeping notes on stderr leaves
+// stdout a clean, parseable report and the json golden untouched; json mode
+// prints nothing here, because surfacing notes as a report schema field is a
+// deliberate M4 decision, not something to smuggle into the json surface. It is
+// the one helper both verify (discovery notes, lint skipped notes) and lint
+// (advisory notes) share, so the two never format the stderr note surface two
+// different ways.
+func writeStderrNotes(w io.Writer, jsonMode bool, notes []string) {
+	if jsonMode {
 		return
 	}
 	for _, n := range notes {
@@ -260,8 +263,9 @@ func verifyDiscovered(d *deps, disc *discover.Discovered, trustRootPath string) 
 // single "lint skipped: no local sources" note is returned instead. A local
 // directory always reached here through discovery, which already loaded its
 // declaration, so the only error attachLintFindings can surface is an
-// operational one from walking the tree, propagated so runMain maps it to exit
-// 3.
+// operational one from a root walk failure, propagated so runMain maps it to
+// exit 3; a single unreadable file inside the tree is advisory (M5), skipped
+// with a note and never swallowing the completed verification report.
 func attachLintFindings(arg string, report *verify.VerificationReport) ([]string, error) {
 	info, statErr := os.Stat(arg)
 	if statErr != nil || !info.IsDir() {

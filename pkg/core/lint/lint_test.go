@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/sns45/smithmark/pkg/core/lint"
+	"github.com/sns45/smithmark/pkg/core/manifest"
 )
 
 // jsFixtureDir is the committed JS and TS fixture corpus for task 4.1,
@@ -139,6 +141,28 @@ func TestDetectJSEnvClass(t *testing.T) {
 	}
 }
 
+// TestDetectJSOptionalChainingEnvCapture pins the M3 fix: optional chaining
+// accesses, process.env?.FOO and process.env?.["FOO"], capture the same
+// name aware Symbol "env:FOO" the plain forms do, closing the masking false
+// negative where a named access behind ?. would otherwise read as a bare
+// process.env and be suppressed by any declaration. A fully computed access,
+// process.env?.[expr], stays bare, since the name is not literal text.
+func TestDetectJSOptionalChainingEnvCapture(t *testing.T) {
+	src := lint.Source{
+		Path: "opt.ts",
+		Content: []byte("const a = process.env?.OPT_NAME;\n" +
+			"const b = process.env?.[\"OPT_BRACKET\"];\n" +
+			"const c = process.env?.[computed];\n"),
+	}
+	dets := lint.DetectJS([]lint.Source{src})
+
+	mustDetect(t, dets, src, `process.env?.OPT_NAME`, "env", "env:OPT_NAME")
+	mustDetect(t, dets, src, `process.env?.["OPT_BRACKET"]`, "env", "env:OPT_BRACKET")
+	// A fully computed optional chaining access cannot be resolved to a literal
+	// name, so it stays the bare Symbol, unchanged by M3.
+	mustDetect(t, dets, src, `process.env?.[computed]`, "env", "process.env")
+}
+
 // TestKnownFalseNegativeDynamicImport pins the spec 1.3 honesty posture:
 // lint is heuristic and advisory, not proof of absence. import(moduleName)
 // carries a variable specifier, not a literal quoted module string, so
@@ -170,6 +194,60 @@ func TestKnownFalsePositiveCommentedRequire(t *testing.T) {
 	src := loadJSFixture(t, "falsenegatives.ts")
 	dets := lint.DetectJS([]lint.Source{src})
 	mustDetect(t, dets, src, `// require("http")`, "network", "http")
+}
+
+// TestDetectJSTwoEnvNamesOneLineYieldsBoth pins the M6 fix: a line naming two
+// distinct env variables produces one env Detection per distinct name, rather
+// than the first masking the second. process.env.DECLARED and
+// process.env.SECRET on one line yield both env:DECLARED and env:SECRET; the
+// same name twice on a line stays a single Detection (deduped by Location plus
+// Symbol). Non env classes remain one per line per class, so the trailing fetch
+// still collapses to a single network Detection.
+func TestDetectJSTwoEnvNamesOneLineYieldsBoth(t *testing.T) {
+	src := lint.Source{
+		Path:    "multi.ts",
+		Content: []byte("const a = process.env.DECLARED, b = process.env.SECRET, c = process.env.SECRET;\n"),
+	}
+	dets := lint.DetectJS([]lint.Source{src})
+
+	// Both distinct names detect at the shared location; the repeated SECRET is
+	// deduped by Location plus Symbol, so exactly two env detections result and
+	// none is the bare process.env fallback.
+	var envSymbols []string
+	for _, d := range dets {
+		if d.Class == "env" {
+			if d.Location != "multi.ts:1" {
+				t.Errorf("env detection at unexpected location %q", d.Location)
+			}
+			envSymbols = append(envSymbols, d.Symbol)
+		}
+	}
+	sort.Strings(envSymbols)
+	if want := []string{"env:DECLARED", "env:SECRET"}; !reflect.DeepEqual(envSymbols, want) {
+		t.Errorf("env symbols = %v, want %v (both names, SECRET deduped once, no bare)", envSymbols, want)
+	}
+}
+
+// TestGapsTwoEnvNamesOneLineMaskingFixed proves the M6 fix closes the masking
+// false negative end to end through Gaps: on a line naming a declared var and an
+// undeclared one, the undeclared one still fires a finding even though the
+// declared one shares its line and would previously have been the only env
+// Detection produced.
+func TestGapsTwoEnvNamesOneLineMaskingFixed(t *testing.T) {
+	src := lint.Source{
+		Path:    "multi.ts",
+		Content: []byte("const a = process.env.DECLARED, b = process.env.SECRET;\n"),
+	}
+	dets := lint.DetectJS([]lint.Source{src})
+	declared := manifest.CapabilitySet{Env: []string{"DECLARED"}}
+	findings := lint.Gaps(declared, dets)
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly 1 (SECRET undeclared, DECLARED suppressed)", findings)
+	}
+	if !strings.Contains(findings[0].Detail, "SECRET") {
+		t.Errorf("finding detail %q should name the undeclared SECRET, not the declared DECLARED", findings[0].Detail)
+	}
 }
 
 // TestDetectJSOneDetectionPerLinePerClass proves the determinism rule: even

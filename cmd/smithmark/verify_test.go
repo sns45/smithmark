@@ -286,6 +286,12 @@ func TestVerifyMissingAttestationSummarySurfacesNote(t *testing.T) {
 	if !strings.Contains(stderr.String(), "no attestation tag") {
 		t.Errorf("stderr does not carry the probed attestation tag note:\n%s", stderr.String())
 	}
+	// A remote npm argument carries no local source tree, so verify emits the
+	// exact lint skipped note (M13 pins the wording, since the D4 addendum
+	// promises it and a summary only test is the only place it is observable).
+	if !strings.Contains(stderr.String(), "lint skipped: no local sources") {
+		t.Errorf("stderr does not carry the lint skipped note for a remote artifact:\n%s", stderr.String())
+	}
 }
 
 // TestVerifyInvalidOutputExitsThree proves an unrecognized --output value fails

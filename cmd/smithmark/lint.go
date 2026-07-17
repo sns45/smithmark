@@ -66,7 +66,7 @@ func runLint(d *deps, root string, o *lintOptions) error {
 	if err != nil {
 		return err
 	}
-	writeAdvisoryNotes(d.Stderr, notes, o.output)
+	writeStderrNotes(d.Stderr, o.output == outputJSON, notes)
 	return writeLintReport(d.Stdout, findings, o.output)
 }
 
@@ -88,7 +88,9 @@ type lintReportDoc struct {
 // reported as undeclared and a note explains why. Any other load failure (a
 // malformed declaration) is returned as an operational error. Sources are walked
 // by discover.WalkSources, scanned by both DetectJS and DetectPython, and the
-// declared versus detected gap is computed by lint.Gaps. Findings is always non
+// declared versus detected gap is computed by lint.Gaps. An unreadable file
+// inside the tree is skipped with an advisory note rather than failing the scan
+// (M5); only a failure at the root itself is operational. Findings is always non
 // nil (lint.Gaps' own convention).
 func lintTree(root string) (findings []lint.Finding, notes []string, err error) {
 	caps, capNotes, err := declaredCapabilities(root)
@@ -97,10 +99,13 @@ func lintTree(root string) (findings []lint.Finding, notes []string, err error) 
 	}
 	notes = append(notes, capNotes...)
 
-	sources, err := discover.WalkSources(root)
+	sources, walkNotes, err := discover.WalkSources(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("lint: walking sources at %s: %w", root, err)
 	}
+	// An unreadable file inside the tree is advisory: the walk skipped it and
+	// noted it, so the partial scan still produces a report (M5).
+	notes = append(notes, walkNotes...)
 
 	detections := append(lint.DetectJS(sources), lint.DetectPython(sources)...)
 	return lint.Gaps(caps, detections), notes, nil
@@ -114,27 +119,26 @@ func lintTree(root string) (findings []lint.Finding, notes []string, err error) 
 // own blank entry hygiene is what keeps an unvalidated stray entry from masking
 // a gap.
 func declaredCapabilities(root string) (manifest.CapabilitySet, []string, error) {
-	decl, err := discover.LoadDeclared(filepath.Join(root, declFileName))
+	// The declaration sits beside the sources: for a directory root that is the
+	// root itself, and for a single file argument (M2) it is the file's own
+	// directory, so `smithmark lint dir/one.ts` still honors dir/smithmark.yaml.
+	// Joining declFileName onto a file path directly would ask the OS to descend
+	// into a non directory, an ENOTDIR that is not classified as os.ErrNotExist
+	// and would surface as a spurious operational error rather than an empty
+	// declaration.
+	declDir := root
+	if info, err := os.Stat(root); err == nil && !info.IsDir() {
+		declDir = filepath.Dir(root)
+	}
+	decl, err := discover.LoadDeclared(filepath.Join(declDir, declFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return manifest.CapabilitySet{}, []string{fmt.Sprintf(
-				"no %s declaration found at %s; treating every detected capability as undeclared", declFileName, root)}, nil
+				"no %s declaration found at %s; treating every detected capability as undeclared", declFileName, declDir)}, nil
 		}
 		return manifest.CapabilitySet{}, nil, err
 	}
 	return decl.Manifest.Capabilities, nil, nil
-}
-
-// writeAdvisoryNotes prints each advisory note to w (stderr) as a "note:" line,
-// but only outside json mode, so stdout stays a clean, parseable report and the
-// json golden is never disturbed. It mirrors verify's writeDiscoveryNotes.
-func writeAdvisoryNotes(w io.Writer, notes []string, output string) {
-	if output == outputJSON {
-		return
-	}
-	for _, n := range notes {
-		fmt.Fprintf(w, "note: %s\n", n)
-	}
 }
 
 // writeLintReport emits the findings in the requested format. json is the

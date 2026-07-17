@@ -77,6 +77,33 @@ func TestDetectPythonExecClass(t *testing.T) {
 	}
 }
 
+// TestDetectPythonOsExecFamily pins that the os.exec bare prefix pattern
+// matches the whole family (M13, from the 4.2 minor), not just the one
+// os.execvpe spelling the exec.py fixture happens to carry: every one of the
+// seven exec* spellings reports an exec detection with the static os.exec
+// Symbol.
+func TestDetectPythonOsExecFamily(t *testing.T) {
+	spellings := []string{
+		"os.execv", "os.execve", "os.execl", "os.execlp",
+		"os.execlpe", "os.execvp", "os.execvpe",
+	}
+	for _, spelling := range spellings {
+		t.Run(spelling, func(t *testing.T) {
+			src := lint.Source{Path: "e.py", Content: []byte(spelling + "(path, args)\n")}
+			dets := lint.DetectPython([]lint.Source{src})
+			found := false
+			for _, d := range dets {
+				if d.Class == "exec" && d.Symbol == "os.exec" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s did not report an exec/os.exec detection; dets = %+v", spelling, dets)
+			}
+		})
+	}
+}
+
 // TestDetectPythonEnvClass pins the name aware env Symbol shape task 4.3
 // adds, mirroring DetectJS: os.environ["FOO"], os.environ.get("FOO"), and
 // os.getenv("FOO") all report Symbol "env:FOO", the same language neutral

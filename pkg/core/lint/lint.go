@@ -102,11 +102,16 @@ type pattern struct {
 // capture FOO, and matchSymbol turns a non empty capture into the language
 // neutral Symbol shape "env:FOO" rather than the pattern's own static
 // symbol field, so Gaps can key off variable name without caring which
-// language produced the Detection. The final env entry is the pre task 4.3
-// bare pattern kept as a fallback: an access this heuristic cannot resolve
-// to a literal name, such as passing process.env itself around or
-// iterating its keys, still reports a Detection, just with Symbol left as
-// the bare "process.env" rather than a name.
+// language produced the Detection. Both named forms also tolerate an
+// optional chaining "?." between process.env and the access (M3), so
+// process.env?.FOO and process.env?.["FOO"] capture FOO the same way,
+// closing the masking false negative where a named access behind ?. would
+// otherwise fall through to the bare pattern. The final env entry is the
+// pre task 4.3 bare pattern kept as a fallback: an access this heuristic
+// cannot resolve to a literal name, such as passing process.env itself
+// around, iterating its keys, or a fully computed process.env?.[expr],
+// still reports a Detection, just with Symbol left as the bare
+// "process.env" rather than a name.
 var jsPatterns = []pattern{
 	// network
 	{"network", "fetch", regexp.MustCompile(`\bfetch\(`)},
@@ -126,9 +131,15 @@ var jsPatterns = []pattern{
 	{"exec", "child_process", regexp.MustCompile(`\bchild_process\b`)},
 	{"exec", "execa", regexp.MustCompile(`\bexeca\b`)},
 	{"exec", "Bun.spawn", regexp.MustCompile(`Bun\.spawn`)},
-	// env
-	{"env", "process.env", regexp.MustCompile(`process\.env\.([A-Za-z_$][A-Za-z0-9_$]*)`)},
-	{"env", "process.env", regexp.MustCompile(`process\.env\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]`)},
+	// env. The dot and bracket forms tolerate an optional chaining "?." between
+	// process.env and the access (M3), so process.env?.FOO and
+	// process.env?.["FOO"] capture FOO into "env:FOO" exactly as the plain forms
+	// do, closing the masking false negative where a named access behind ?. would
+	// otherwise fall through to the bare pattern and be suppressed. A fully
+	// computed access, process.env?.[expr], carries no literal name and stays
+	// bare, matched only by the final fallback below.
+	{"env", "process.env", regexp.MustCompile(`process\.env\??\.([A-Za-z_$][A-Za-z0-9_$]*)`)},
+	{"env", "process.env", regexp.MustCompile(`process\.env(?:\?\.)?\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]`)},
 	{"env", "process.env", regexp.MustCompile(`process\.env`)},
 }
 
@@ -164,12 +175,15 @@ var jsPatterns = []pattern{
 // every call. The sort deliberately compares the parsed line number rather
 // than the flat "path:line" Location string: comparing Location as one
 // string would sort "path:10" before "path:7", since "1" is
-// lexicographically less than "7", putting line 10 ahead of line 7. At most
-// one Detection is emitted per line per class, even when more than one
-// pattern of that class matches the same line; distinct classes matching
-// the same line each still produce their own Detection. This scan, dedup,
-// and sort pipeline lives in the shared runDetector, so DetectJS itself is
-// nothing more than its extension set and pattern table.
+// lexicographically less than "7", putting line 10 ahead of line 7. One
+// Detection is emitted per line per class, even when more than one pattern of
+// that class matches the same line, with a single exception: a line that
+// names two DISTINCT env variables (process.env.A and process.env.B) yields
+// one env Detection per distinct name (M6), so a declared name can never mask
+// an undeclared one sharing its line. Distinct classes matching the same line
+// each still produce their own Detection. This scan, dedup, and sort pipeline
+// lives in the shared runDetector, so DetectJS itself is nothing more than its
+// extension set and pattern table.
 func DetectJS(files []Source) []Detection {
 	return runDetector(files, jsExtensions, jsPatterns)
 }
@@ -277,12 +291,31 @@ var pyPatterns = []pattern{
 //
 // The result is sorted by path, then by line as a number, then by Class,
 // then by Symbol, the same numeric, not lexicographic, sort DetectJS uses,
-// so identical input bytes produce byte identical output on every call. At
-// most one Detection is emitted per line per class, even when more than one
-// pattern of that class matches the same line; distinct classes matching
-// the same line each still produce their own Detection.
+// so identical input bytes produce byte identical output on every call. One
+// Detection is emitted per line per class, even when more than one pattern of
+// that class matches the same line, with the same single exception DetectJS
+// documents: a line naming two DISTINCT env variables yields one env
+// Detection per distinct name (M6). Distinct classes matching the same line
+// each still produce their own Detection.
 func DetectPython(files []Source) []Detection {
 	return runDetector(files, pyExtensions, pyPatterns)
+}
+
+// SourceExtensions returns every file extension the capability detectors
+// scan, drawn from both language tables (jsExtensions for DetectJS and
+// pyExtensions for DetectPython) so the two never have to be restated
+// elsewhere. discover.WalkSources derives its collection set from this
+// exact call rather than keeping its own copy, so a new detector extension
+// added to a language table here cannot be recognized by a detector yet
+// silently forgotten by the walker (TestWalkSourcesMatchesDetectorExtensions
+// pins the agreement). Each extension is lowercase and dot prefixed, the
+// shape hasExtension matches against case insensitively. The result is a
+// fresh slice the caller may keep or sort without mutating package state.
+func SourceExtensions() []string {
+	exts := make([]string, 0, len(jsExtensions)+len(pyExtensions))
+	exts = append(exts, jsExtensions...)
+	exts = append(exts, pyExtensions...)
+	return exts
 }
 
 // hasExtension reports whether path ends in one of extensions, ignoring
@@ -318,29 +351,42 @@ type detection struct {
 // the name, so the two must never drift apart.
 const envSymbolPrefix = "env:"
 
-// matchSymbol reports whether line matches p and, if so, the Symbol a
-// Detection for that match should carry. Most patterns carry no regexp
-// capturing group, so the static p.symbol is reported unchanged; the env
-// patterns are the one case that do (see the jsPatterns and pyPatterns doc
-// comments), and when the capturing group matched non empty text, the
-// Symbol reported is envSymbolPrefix plus that text instead, the shared
-// name aware shape both DetectJS's and DetectPython's env patterns produce
-// so Gaps can key off a variable name without caring which language
-// produced the Detection.
-func matchSymbol(p pattern, line string) (symbol string, ok bool) {
-	m := p.pattern.FindStringSubmatch(line)
-	if m == nil {
-		return "", false
+// matchSymbols reports every Symbol a Detection for p's matches on line
+// should carry. A pattern with no capturing group (every non env pattern,
+// and the bare env fallback) matches at most one Symbol per line: its static
+// p.symbol, returned once when the pattern matches at all. The env named
+// patterns are the one case that carry a capturing group (see the jsPatterns
+// and pyPatterns doc comments); each distinct captured variable name on the
+// line yields its own envSymbolPrefix plus name Symbol, so two different
+// names on one line, process.env.A and process.env.B, become two Detections
+// rather than the first masking the second (M6). An empty capture is skipped,
+// so only a real literal name produces a named Symbol. This is the shared
+// name aware shape both DetectJS's and DetectPython's env patterns produce,
+// so Gaps can key off a variable name without caring which language produced
+// the Detection.
+func matchSymbols(p pattern, line string) []string {
+	if p.pattern.NumSubexp() == 0 {
+		if p.pattern.MatchString(line) {
+			return []string{p.symbol}
+		}
+		return nil
 	}
-	if len(m) > 1 && m[1] != "" {
-		return envSymbolPrefix + m[1], true
+	var symbols []string
+	for _, m := range p.pattern.FindAllStringSubmatch(line, -1) {
+		if len(m) > 1 && m[1] != "" {
+			symbols = append(symbols, envSymbolPrefix+m[1])
+		}
 	}
-	return p.symbol, true
+	return symbols
 }
 
-// scanSource applies patterns to f line by line, collapsing repeat matches
-// of the same class on one line into a single detection. Shared by DetectJS
-// (with jsPatterns) and DetectPython (with pyPatterns).
+// scanSource applies patterns to f line by line. It enforces one detection
+// per line per class for every non env class and for a bare env access, so a
+// line matching two network patterns still yields a single network detection;
+// the one exception is a captured env NAME, where each DISTINCT name on a line
+// yields its own detection (M6), still deduped by Location plus Symbol so the
+// same name captured twice on one line stays one. Shared by DetectJS (with
+// jsPatterns) and DetectPython (with pyPatterns).
 func scanSource(f Source, patterns []pattern) []detection {
 	var out []detection
 	scanner := bufio.NewScanner(bytes.NewReader(f.Content))
@@ -353,12 +399,26 @@ func scanSource(f Source, patterns []pattern) []detection {
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
+		// matchedClasses enforces one detection per line per class for every
+		// bare, non capturing pattern; a named env pattern carries a capturing
+		// group, so it is exempt and its distinct names each detect.
 		matchedClasses := make(map[string]bool, len(patterns))
+		// seen dedups by Symbol within the line (the Location plus Symbol rule),
+		// so the same captured name appearing twice on one line stays one.
+		seen := make(map[string]bool)
 		for _, p := range patterns {
-			if matchedClasses[p.class] {
+			// A non capturing pattern reports the class as matched at most once
+			// per line; once it is, skip its remaining same class patterns and
+			// the bare env fallback. A capturing (named env) pattern is never
+			// gated this way, so a second distinct name on the line still fires.
+			if p.pattern.NumSubexp() == 0 && matchedClasses[p.class] {
 				continue
 			}
-			if symbol, matched := matchSymbol(p, line); matched {
+			for _, symbol := range matchSymbols(p, line) {
+				if seen[symbol] {
+					continue
+				}
+				seen[symbol] = true
 				matchedClasses[p.class] = true
 				out = append(out, detection{
 					class:  p.class,

@@ -5,7 +5,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 **Kind** distinguishes how a code is used:
 - `validation`: a semantic issue found in a capability manifest or skill bundle at parse or digest time.
 - `check`: a pass or fail outcome recorded in a `VerificationReport` during `smithmark verify`. Checks fall in two classes. A failing check drives the nonzero verify exit code (D4) when it fails. An informational check is marked `informational` in the report, never drives an exit code, and is left for downstream policy such as assayward to weigh; a failed informational check is a normal, non blocking observation.
-- `finding`: a declared versus detected capability gap recorded by the capability lint.
+- `finding`: a declared versus detected capability gap recorded by the capability lint. Four `UNDECLARED_*` codes cover the network, filesystem, exec, and env classes; the fifth declared class, secrets, has no static detector in v0.1, since a secret is not a syntactic construct these line matching heuristics can recognize, so it is deliberately never the subject of a finding.
 - `operational`: a condition outside the pure core, such as a missing external tool or an unresolved configuration value.
 
 **Introduced** is the milestone the constant first landed in this registry. A meaning that says "reserved for" a later milestone means the code is defined now but only produced once that milestone's feature ships.
@@ -38,7 +38,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `BUNDLE_DUPLICATE_PATH` | validation | Two entries in a bundle share the same path. | M1 |
 | `BUNDLE_MODE_INVALID` | validation | A bundle file mode is not regular or executable. | M1 |
 | `BUNDLE_DIGEST_INVALID` | validation | A bundle file sha256 is not lowercase hex of the expected length. | M1 |
-| `BUNDLE_SYMLINK_REJECTED` | validation | A symlink was found while walking a skill root; reserved for M2, since the pure core defined here never touches the filesystem itself. | M1 |
+| `BUNDLE_SYMLINK_REJECTED` | validation | A symlink was found while walking a skill root, which the skill bundle walker rejects outright, since a bundle digest must be an exact, unambiguous account of what will be installed. | M1 |
 | `SIGNATURE_VALID` | check | Failing check: the DSSE envelope signature verified successfully against the trust material. A failure stops the payload derived checks from being trusted. | M1 |
 | `REKOR_INCLUSION_VALID` | check | Informational check: the signature's transparency log inclusion proof verified successfully. Key based offline bundles legitimately carry no inclusion entry, so this failing is a normal observation rather than a blocking one. | M1 |
 | `SUBJECT_DIGEST_MATCH` | check | Failing check: the attested subject digest matches the digest of the artifact being verified, on both the algorithm keys and their values. | M1 |
@@ -54,8 +54,8 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `UNDECLARED_FILESYSTEM` | finding | Detected code accesses the filesystem in a way the manifest does not declare. Emitted by the capability lint, surfaced by `smithmark lint` and by `smithmark verify` over a local source tree. | M1 |
 | `UNDECLARED_EXEC` | finding | Detected code executes a binary the manifest does not declare. Emitted by the capability lint, surfaced by `smithmark lint` and by `smithmark verify` over a local source tree. | M1 |
 | `UNDECLARED_ENV` | finding | Detected code reads an environment variable the manifest does not declare. Emitted by the capability lint, surfaced by `smithmark lint` and by `smithmark verify` over a local source tree. | M1 |
-| `TOOL_LISTING_MISMATCH` | finding | The declared MCP tool listing disagrees with the tools extracted from the live server. Raised by `smithmark attest` as a fail closed error when both `--tools-from` and a declared launch command are present and the static listing deviates from the live extraction by tool name or input schema digest; attest is the only command that may execute the artifact (U2), so it is the only site this comparison can run. | M1 |
-| `SIGNING_UNAVAILABLE_PLATFORM` | operational | Signing could not proceed because the current platform lacks a required signing capability; reserved for M2. | M1 |
+| `TOOL_LISTING_MISMATCH` | operational | The declared MCP tool listing disagrees with the tools extracted from the live server. Raised by `smithmark attest` as a fail closed error (not a recorded finding) when both `--tools-from` and a declared launch command are present and the static listing deviates from the live extraction by tool name, a duplicate name on either side, or an input schema digest; attest is the only command that may execute the artifact (U2), so it is the only site this comparison can run. | M1 |
+| `SIGNING_UNAVAILABLE_PLATFORM` | operational | Signing could not proceed because the current platform lacks a required signing capability. Raised by the wasip1 sign and verify stubs, which fail closed because sigstore-go is out of the wasip1 dependency graph. | M1 |
 | `SBOM_FORGESEAL_MISSING` | operational | The forgeseal binary required to generate a dependency SBOM could not be found on PATH. | M1 |
 | `SBOM_FORGESEAL_VERSION_UNSUPPORTED` | operational | The installed forgeseal binary is older than the minimum version this build requires, or its reported version string could not be parsed as semver at all; "dev" is always accepted. | M1 |
 | `SBOM_FORGESEAL_OUTPUT_INVALID` | operational | The forgeseal sbom output was not a valid CycloneDX document: it failed strict parsing, or it decoded but lacked the CycloneDX bomFormat marker or a specVersion. | M2 |
