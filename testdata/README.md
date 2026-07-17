@@ -167,3 +167,70 @@ test).
   `dist.integrity` value to hex independently (by hand, outside the
   implementation) and asserts the two agree, so the sha512 base64 to hex
   conversion (U6) is pinned against a real value, not merely self consistent.
+
+## MCP Registry discovery fixtures (`registry/`)
+
+`registry/entry_npm.json` and `registry/entry_remote.json` are real MCP
+Registry API response snapshots, fetched once during Task 3.6's development
+(network access is allowed for a maintainer preparing fixtures; it is never
+allowed in CI or in a test). `registry/sentry_packument.json` is a real npm
+registry response supporting the same task's npm continuation test; it
+follows the exact trimming convention `npm/packument.json` above already
+established.
+
+- **Snapshot date**: 2026-07-17.
+- **Registry API shape verified before fetching**: `smithmark` does not
+  assume the MCP Registry's API shape; its published OpenAPI description
+  (`GET https://registry.modelcontextprotocol.io/openapi.yaml`) was fetched
+  and read during this task's development to confirm it. The operation
+  `pkg/discover/registry.go`'s `FetchRegistryEntry` uses is "get specific MCP
+  server version" (`GET /v0/servers/{serverName}/versions/{version}`, using
+  the special version value `latest`), whose path parameter is documented as
+  a URL-encoded server name (the OpenAPI example is literally
+  `com.example%2Fmy-server`); `FetchRegistryEntry` percent encodes the name
+  with `url.PathEscape` before building the request for exactly this reason,
+  since a real server name such as `io.github.getsentry/sentry-mcp` would
+  otherwise split across path segments and never match the route. A search
+  endpoint also exists (`GET /v0/servers?search=...`, substring match on
+  name), used only to find real candidate entries during fixture preparation,
+  never called by `FetchRegistryEntry` itself.
+- **`entry_npm.json`**: `io.github.getsentry/sentry-mcp` version `0.25.0`
+  (Sentry's official MCP server), chosen because it is a real, well known
+  registry entry whose only distribution shape is a single npm package
+  (`@sentry/mcp-server`), the npm backed case `registry check`'s command
+  pipeline continues into the shared verification pipeline for. Committed
+  verbatim (undisturbed field values; only whitespace differs from the live
+  response), since `FetchRegistryEntry` decodes it leniently (a plain
+  `json.Unmarshal`, matching how this codebase already treats every other
+  foreign, community owned format it does not control the schema of: npm's
+  packument and attestations responses above, package.json's `smithmark` key,
+  SKILL.md frontmatter). It carries no attestation reference field, which is
+  exactly the gap `REGISTRY_ATTESTATION_REF_PRESENT` demonstrates.
+  - **Source request**:
+    `GET https://registry.modelcontextprotocol.io/v0/servers/io.github.getsentry%2Fsentry-mcp/versions/latest`
+- **`entry_remote.json`**: `com.notion/mcp` version `1.0.1` (Notion's
+  official MCP server), chosen because it is a real, well known registry
+  entry whose only distribution shape is two remote endpoints
+  (`streamable-http` and `sse`) and no packages at all: the remote only case
+  `HOSTED_ENDPOINT_UNSUPPORTED` demonstrates. Committed verbatim for the same
+  lenient decode reason as `entry_npm.json` above.
+  - **Source request**:
+    `GET https://registry.modelcontextprotocol.io/v0/servers/com.notion%2Fmcp/versions/latest`
+- **`sentry_packument.json`**: a real npm registry response for
+  `@sentry/mcp-server`, trimmed down the same way `npm/packument.json` above
+  is: only `dist.integrity` and `dist.tarball` are ever read by
+  `pkg/discover/npm.go`, so the fixture keeps the top level `name`,
+  `dist-tags`, and a handful of realistic noise fields (`author`, `license`,
+  `homepage`, `keywords`, `maintainers`, a trimmed `time` block), and, for the
+  single `0.25.0` version entry (the version `entry_npm.json` names), `name`,
+  `version`, a trimmed `scripts` block, and the full `dist` block. This
+  supports the npm continuation test only (`cmd/smithmark/registry_test.go`'s
+  `TestRegistryCheckNPMBackedMissingAttestationExitsOne`): the npm
+  attestations endpoint for this package version is served a canned 404 in
+  that test regardless of whatever the real endpoint currently returns
+  (matching how `cmd/smithmark/verify_test.go`'s own `npmMissingTransport`
+  already serves a canned 404 for its unrelated npm fixture package), so the
+  test exercises discovery and check merging against the standard missing
+  attestation outcome rather than fabricating a full passing npm
+  verification chain the committed fixtures were never signed to support.
+  - **Source request**: `GET https://registry.npmjs.org/@sentry/mcp-server`

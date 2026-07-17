@@ -57,6 +57,10 @@ type ResolveOptions struct {
 	// Registry is the npm registry base URL. Empty means
 	// https://registry.npmjs.org.
 	Registry string
+	// RegistryAPI is the MCP Registry base URL FetchRegistryEntry talks to
+	// (Task 3.6). Empty means the real registry.modelcontextprotocol.io,
+	// the same injection pattern Registry above already uses for npm.
+	RegistryAPI string
 	// Target is the OCI target Resolve queries for both the D3 tag mapped
 	// path (npm, pypi, skill) and the native referrers path (oci). A nil
 	// Target means OCI backed discovery is skipped with a note, not an error:

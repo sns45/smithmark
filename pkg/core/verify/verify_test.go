@@ -618,3 +618,104 @@ func TestCheckOutcomesSetOnlyInVerifyPackage(t *testing.T) {
 		t.Errorf("CheckResult is constructed outside pkg/core/verify, which would let a check outcome be set elsewhere: %v", offenders)
 	}
 }
+
+// --- RegistryChecks (Task 3.6, spec 5, decision D5) -------------------------
+//
+// registry check builds its two registry specific checks through this pure
+// helper rather than constructing CheckResult literals in cmd/smithmark: spec
+// 3's rule is that check outcomes are decided in exactly one place, and
+// TestCheckOutcomesSetOnlyInVerifyPackage above enforces that no package
+// outside pkg/core/verify ever writes a "verify.CheckResult{" literal. Calling
+// RegistryChecks from cmd/smithmark never does, so the guard stays green with
+// no change to its allowlist.
+
+// TestRegistryChecksBothInformational asserts both registry checks are always
+// marked informational, in every shape (npm backed, remote only, or an entry
+// carrying the RFC's not yet real attestation reference field): neither may
+// ever drive an exit code (D5).
+func TestRegistryChecksBothInformational(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		hasAttRef  bool
+		remoteOnly bool
+		remotes    []string
+	}{
+		{"npm backed, no att ref", false, false, nil},
+		{"remote only, no att ref", false, true, []string{"https://mcp.notion.com/mcp (streamable-http)"}},
+		{"att ref present", true, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checks := verify.RegistryChecks(tc.hasAttRef, tc.remoteOnly, tc.remotes)
+			if len(checks) != 2 {
+				t.Fatalf("RegistryChecks returned %d checks, want 2", len(checks))
+			}
+			for _, c := range checks {
+				if !c.Informational {
+					t.Errorf("check %s is not informational; registry checks must never drive an exit code (D5)", c.Code)
+				}
+			}
+		})
+	}
+}
+
+// TestRegistryChecksAttestationRefAlwaysFailsToday demonstrates the RFC gap
+// (spec 5): with hasAttRef false, exactly what every real MCP Registry entry
+// decodes to today, REGISTRY_ATTESTATION_REF_PRESENT fails and its detail
+// names the gap.
+func TestRegistryChecksAttestationRefAlwaysFailsToday(t *testing.T) {
+	checks := verify.RegistryChecks(false, false, nil)
+	c := requireCheck(t, checks, codes.RegistryAttestationRefPresent)
+	if c.Passed {
+		t.Error("REGISTRY_ATTESTATION_REF_PRESENT passed with hasAttRef false; no real registry entry carries this field today")
+	}
+	if c.Detail == "" {
+		t.Error("REGISTRY_ATTESTATION_REF_PRESENT detail is empty; it must name the RFC gap")
+	}
+}
+
+// TestRegistryChecksAttestationRefPassesWhenPresent proves the check is real
+// logic driven by hasAttRef, not a hardcoded failure: once an entry carries
+// the RFC's field (hasAttRef true), the check passes.
+func TestRegistryChecksAttestationRefPassesWhenPresent(t *testing.T) {
+	checks := verify.RegistryChecks(true, false, nil)
+	c := requireCheck(t, checks, codes.RegistryAttestationRefPresent)
+	if !c.Passed {
+		t.Error("REGISTRY_ATTESTATION_REF_PRESENT failed with hasAttRef true, want passed")
+	}
+}
+
+// TestRegistryChecksHostedEndpointFailsOnlyWhenRemoteOnly asserts
+// HOSTED_ENDPOINT_UNSUPPORTED fails, naming the remote endpoints, exactly when
+// remoteOnly is true (D5's actual guard), and otherwise passes: an npm backed
+// entry that also happens to declare remotes is not blocked by them.
+func TestRegistryChecksHostedEndpointFailsOnlyWhenRemoteOnly(t *testing.T) {
+	remotes := []string{"https://mcp.notion.com/mcp (streamable-http)", "https://mcp.notion.com/sse (sse)"}
+
+	remoteOnly := requireCheck(t, verify.RegistryChecks(false, true, remotes), codes.HostedEndpointUnsupported)
+	if remoteOnly.Passed {
+		t.Error("HOSTED_ENDPOINT_UNSUPPORTED passed for a remote only entry, want failed")
+	}
+	for _, r := range remotes {
+		if !strings.Contains(remoteOnly.Detail, r) {
+			t.Errorf("HOSTED_ENDPOINT_UNSUPPORTED detail %q does not name remote %q", remoteOnly.Detail, r)
+		}
+	}
+
+	npmBacked := requireCheck(t, verify.RegistryChecks(false, false, remotes), codes.HostedEndpointUnsupported)
+	if !npmBacked.Passed {
+		t.Error("HOSTED_ENDPOINT_UNSUPPORTED failed for an npm backed entry, want passed (remotes present are not blocking)")
+	}
+}
+
+// requireCheck returns the CheckResult with code from checks, failing the
+// test when absent.
+func requireCheck(t *testing.T, checks []verify.CheckResult, code string) verify.CheckResult {
+	t.Helper()
+	for _, c := range checks {
+		if c.Code == code {
+			return c
+		}
+	}
+	t.Fatalf("checks carry no code %s", code)
+	return verify.CheckResult{}
+}

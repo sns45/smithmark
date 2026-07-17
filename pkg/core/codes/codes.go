@@ -163,6 +163,12 @@ const (
 	// HostedEndpointUnsupported reports, informationally, that a registry
 	// entry points only at a remote endpoint this build does not attest.
 	HostedEndpointUnsupported = "HOSTED_ENDPOINT_UNSUPPORTED"
+	// RegistryAttestationRefPresent reports, informationally, whether an MCP
+	// Registry entry carries an attestation reference field. No such field
+	// exists in the registry schema today (Task 6.4's provenance RFC proposes
+	// adding one), so this fails for every real entry; that failure is the
+	// demonstration `smithmark registry check` exists to show.
+	RegistryAttestationRefPresent = "REGISTRY_ATTESTATION_REF_PRESENT"
 )
 
 // Lint finding codes (spec 3). Phase 4 (M4) is the first consumer of these;
@@ -300,6 +306,7 @@ func All() []string {
 		DependencySBOMMissing,
 		PredicateVersionUnsupported,
 		HostedEndpointUnsupported,
+		RegistryAttestationRefPresent,
 		UndeclaredNetworkEgress,
 		UndeclaredFilesystem,
 		UndeclaredExec,

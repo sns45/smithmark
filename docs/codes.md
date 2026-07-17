@@ -49,6 +49,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `DEPENDENCY_SBOM_MISSING` | check | Informational check: the manifest carries no dependency SBOM reference. It fails when the dependencies block is absent, reported as an observation rather than a blocking failure. | M1 |
 | `PREDICATE_VERSION_UNSUPPORTED` | check | Failing check: the predicate version inside the attestation statement is not one this build understands. It covers both an unknown predicateType and a predicate whose schema the strict parse cannot understand; the detail distinguishes them. | M1 |
 | `HOSTED_ENDPOINT_UNSUPPORTED` | check | A registry entry points only at a remote endpoint, reported informationally since this build does not attest hosted servers; reserved for M3. | M1 |
+| `REGISTRY_ATTESTATION_REF_PRESENT` | check | Informational check: an MCP Registry entry carries an attestation reference field. No such field exists in the registry schema today, so this fails for every real entry `smithmark registry check` fetches; that failure demonstrates the gap the MCP Registry provenance RFC (Task 6.4) proposes to close. | M3 |
 | `UNDECLARED_NETWORK_EGRESS` | finding | Detected code performs network egress the manifest does not declare; reserved for M4. | M1 |
 | `UNDECLARED_FILESYSTEM` | finding | Detected code accesses the filesystem in a way the manifest does not declare; reserved for M4. | M1 |
 | `UNDECLARED_EXEC` | finding | Detected code executes a binary the manifest does not declare; reserved for M4. | M1 |

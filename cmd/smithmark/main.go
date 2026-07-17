@@ -189,6 +189,7 @@ func newRootCmd(d *deps) *cobra.Command {
 	root.AddCommand(newAttestCmd(d))
 	root.AddCommand(newManifestCmd(d))
 	root.AddCommand(newVerifyCmd(d))
+	root.AddCommand(newRegistryCmd(d))
 	return root
 }
 

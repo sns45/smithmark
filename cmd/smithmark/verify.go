@@ -105,9 +105,38 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 			"verify: keyless certificate verification is not supported in v0.1; --certificate-identity and --certificate-oidc-issuer verification lands with M6 trust root support")
 	}
 
+	disc, err := discoverForVerification(ctx, d, arg, o.attestationBase, o.bundle)
+	if err != nil {
+		return err
+	}
+
+	report, err := verifyDiscovered(d, disc, o.trustRoot)
+	if err != nil {
+		return err
+	}
+
+	code := verifyExitCode(report, o.strict)
+	if err := writeReport(d.Stdout, report, o.output, code); err != nil {
+		return err
+	}
+	if code == 0 {
+		return nil
+	}
+	return &verifyExit{code: code}
+}
+
+// discoverForVerification builds discover.ResolveOptions from the shared
+// attestation discovery flags and resolves arg through discover.Resolve. An
+// explicit bundlePath short circuits attestation discovery entirely (no OCI
+// target is built, matching discover.Resolve's own BundlePath contract);
+// every other case constructs a read only OCI target via d.ReadTarget first,
+// since discovery needs one to look up the D3 deterministic attestation tag.
+// Both verify and registry check's npm continuation (Task 3.6) share this, so
+// the discovery wiring is never duplicated between the two commands.
+func discoverForVerification(ctx context.Context, d *deps, arg, attestationBase, bundlePath string) (*discover.Discovered, error) {
 	opts := discover.ResolveOptions{
-		Base:       o.attestationBase,
-		BundlePath: o.bundle,
+		Base:       attestationBase,
+		BundlePath: bundlePath,
 		Transport:  d.Transport,
 		Registry:   d.Registry,
 	}
@@ -117,32 +146,36 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 	// client with; discovery itself keys the lookup off the deterministic
 	// attestation tag, and live registry scoping is refined when M6 wires
 	// verification against a real registry.
-	if o.bundle == "" {
-		target, err := d.ReadTarget(ctx, o.attestationBase)
+	if bundlePath == "" {
+		target, err := d.ReadTarget(ctx, attestationBase)
 		if err != nil {
-			return fmt.Errorf("verify: resolving OCI target for discovery: %w", err)
+			return nil, fmt.Errorf("resolving OCI target for discovery: %w", err)
 		}
 		opts.Target = target
 	}
+	return discover.Resolve(ctx, arg, opts)
+}
 
-	disc, err := discover.Resolve(ctx, arg, opts)
-	if err != nil {
-		return err
-	}
-
+// verifyDiscovered runs the pure verification core over disc and attaches the
+// assayward compatible evidence block when a candidate won (Task 3.4). Check
+// outcomes are decided in exactly one place regardless of which command
+// reached here (spec 3): both verify and registry check's npm continuation
+// (Task 3.6) call this rather than each running verify.Run by hand.
+func verifyDiscovered(d *deps, disc *discover.Discovered, trustRootPath string) (*verify.VerificationReport, error) {
 	// Trust material is required whenever bundles were discovered: v0.1 verifies
 	// key based bundles against a PEM public key named by --trust-root. Bundles
 	// present with no trust root is a configuration error naming the flag, never
 	// a silent skip of signature verification.
 	var trust []byte
 	if len(disc.Bundles) > 0 {
-		if o.trustRoot == "" {
-			return codes.E(codes.SigningConfigInvalid,
-				"verify: %d attestation bundle(s) were discovered but no --trust-root was provided; v0.1 verifies key based bundles against a PEM public key (the Sigstore TUF trust root form lands in M6)", len(disc.Bundles))
+		if trustRootPath == "" {
+			return nil, codes.E(codes.SigningConfigInvalid,
+				"%d attestation bundle(s) were discovered but no --trust-root was provided; v0.1 verifies key based bundles against a PEM public key (the Sigstore TUF trust root form lands in M6)", len(disc.Bundles))
 		}
-		trust, err = os.ReadFile(o.trustRoot)
+		var err error
+		trust, err = os.ReadFile(trustRootPath)
 		if err != nil {
-			return codes.E(codes.SigningConfigInvalid, "verify: reading --trust-root %s: %v", o.trustRoot, err)
+			return nil, codes.E(codes.SigningConfigInvalid, "reading --trust-root %s: %v", trustRootPath, err)
 		}
 	}
 
@@ -154,7 +187,7 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 		Now:           d.Now().UTC(),
 	}, d.Verifier)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Attach the assayward compatible evidence block built from the winning
@@ -164,19 +197,11 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 	if report.WinningBundle >= 0 {
 		ev, err := report.EvidenceBlock(disc.Bundles[report.WinningBundle])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		report.Evidence = ev
 	}
-
-	code := verifyExitCode(report, o.strict)
-	if err := writeReport(d.Stdout, report, o.output, code); err != nil {
-		return err
-	}
-	if code == 0 {
-		return nil
-	}
-	return &verifyExit{code: code}
+	return report, nil
 }
 
 // verifyExitCode classifies a completed report into its process exit code

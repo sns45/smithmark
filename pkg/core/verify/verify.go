@@ -524,6 +524,46 @@ func aggregateIssues(issues []manifest.Issue) string {
 	return "the capability manifest is invalid: " + strings.Join(parts, "; ")
 }
 
+// RegistryChecks builds the two check results `smithmark registry check`
+// always reports for one MCP Registry entry (spec 5, decision D5). Both are
+// informational: neither ever drives an exit code (the D4 contract), and the
+// cmd/smithmark registry command merges them straight into a report's Checks
+// rather than constructing CheckResult literals itself, keeping spec 3's
+// single authority rule intact (TestCheckOutcomesSetOnlyInVerifyPackage).
+//
+// REGISTRY_ATTESTATION_REF_PRESENT passes when hasAttRef is true: the entry
+// carries the MCP Registry provenance RFC's proposed attestation reference
+// field. No real registry entry carries that field today (the RFC, Task 6.4,
+// is what would add it), so this fails for every real entry `registry check`
+// fetches; that failure is the RFC gap the command demonstrates.
+//
+// HOSTED_ENDPOINT_UNSUPPORTED fails only when remoteOnly is true: the entry's
+// only distribution shape is a hosted endpoint this build does not attest
+// (v0.1 verifies artifact distributed servers only). Its detail names every
+// entry in remotes. An entry that also carries an npm package is not blocked
+// by declaring remotes too, so remoteOnly false always passes regardless of
+// what remotes holds.
+func RegistryChecks(hasAttRef bool, remoteOnly bool, remotes []string) []CheckResult {
+	attDetail := ""
+	if !hasAttRef {
+		attDetail = "this MCP Registry entry carries no attestation reference field; that field does not exist in the registry schema today, which is the gap the MCP Registry provenance RFC proposes to close"
+	}
+
+	hostedPassed := true
+	hostedDetail := ""
+	if remoteOnly {
+		hostedPassed = false
+		hostedDetail = fmt.Sprintf(
+			"this build verifies artifact distributed (npm) servers only; this registry entry points only at remote endpoint(s): %s",
+			strings.Join(remotes, ", "))
+	}
+
+	return []CheckResult{
+		{Code: codes.RegistryAttestationRefPresent, Passed: hasAttRef, Informational: true, Detail: attDetail},
+		{Code: codes.HostedEndpointUnsupported, Passed: hostedPassed, Informational: true, Detail: hostedDetail},
+	}
+}
+
 // predicateParseDetail distinguishes the two causes PREDICATE_VERSION_UNSUPPORTED
 // covers: an unknown predicateType, which ParseStatement names explicitly, and
 // any other strict parse failure of the predicate, which stands in for a
