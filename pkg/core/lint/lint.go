@@ -464,13 +464,61 @@ var classFindings = map[string]struct {
 // "AWS_*" covers "AWS_KEY". This same rule also covers the bare wildcard
 // escape hatch without a separate special case: a declared bare "*" has an
 // empty prefix, and every name has the empty string as a prefix, so "*"
-// covers every name.
+// covers every name. A blank entry is skipped, so it never masks a real gap
+// (the blank hygiene documented on Gaps); note "*" is not blank, it is the
+// wildcard.
 func envDeclared(declaredEnv []string, name string) bool {
 	for _, d := range declaredEnv {
+		if d == "" {
+			continue
+		}
 		if d == name {
 			return true
 		}
 		if prefix, ok := strings.CutSuffix(d, "*"); ok && strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyDeclaredEgress, anyDeclaredFS, anyDeclaredExec, and anyDeclaredEnv report
+// whether a declared capability list carries at least one non blank entry. A
+// validated CapabilitySet never carries a blank one (Validate rejects an
+// empty host, path, binary, or env name), so these agree with a plain len > 0
+// on validated input; they exist as the defensive blank hygiene Gaps
+// documents, so an unvalidated declaration carrying a stray blank entry does
+// not silently suppress a whole class and mask a real gap.
+func anyDeclaredEgress(rules []manifest.EgressRule) bool {
+	for _, r := range rules {
+		if r.Host != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func anyDeclaredFS(rules []manifest.FSRule) bool {
+	for _, r := range rules {
+		if r.Path != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func anyDeclaredExec(rules []manifest.ExecRule) bool {
+	for _, r := range rules {
+		if r.Binary != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func anyDeclaredEnv(env []string) bool {
+	for _, e := range env {
+		if e != "" {
 			return true
 		}
 	}
@@ -483,6 +531,16 @@ func envDeclared(declaredEnv []string, name string) bool {
 // reports every Detection whose capability class the manifest leaves
 // uncovered as an UNDECLARED_* Finding. Gaps is pure: it does no I/O and
 // depends on nothing but its two arguments.
+//
+// Precondition: declared is expected to be a validated CapabilitySet, the
+// shape manifest.Validate accepts, since that is what every producer in this
+// build (the smithmark.yaml loader, the attested predicate) hands it. Gaps
+// does not itself validate, but it applies one defensive hygiene rule so an
+// unvalidated declaration carrying a stray blank entry cannot mask a real
+// gap: a blank declared entry (an egress rule with an empty host, an fs rule
+// with an empty path, an exec rule with an empty binary, or an empty env
+// string) is ignored when deciding whether a class was declared. A declared
+// bare "*" is the wildcard, not a blank, so it still suppresses its class.
 //
 // Severities are fixed per class (see classFindings and the env case
 // below): network and exec are high, filesystem is medium, env is medium
@@ -546,11 +604,15 @@ func Gaps(declared manifest.CapabilitySet, detections []Detection) []Finding {
 		})
 	}
 
-	networkDeclared := len(declared.NetworkEgress) > 0
-	filesystemDeclared := len(declared.Filesystem) > 0
-	execDeclared := len(declared.Exec) > 0
+	networkDeclared := anyDeclaredEgress(declared.NetworkEgress)
+	filesystemDeclared := anyDeclaredFS(declared.Filesystem)
+	execDeclared := anyDeclaredExec(declared.Exec)
 
 	for _, d := range detections {
+		// Only the four capability classes the detectors produce (network,
+		// filesystem, exec, env) are handled here; a Detection carrying any
+		// other Class is ignored by design, since no detector ever emits one.
+		// TestGapsIgnoresUnknownClass guards this invariant.
 		switch d.Class {
 		case "network":
 			if !networkDeclared {
@@ -580,7 +642,7 @@ func Gaps(declared manifest.CapabilitySet, detections []Detection) []Finding {
 						fmt.Sprintf("env var %s is not declared in capabilities.env", name),
 						d.Location)
 				}
-			} else if len(declared.Env) == 0 {
+			} else if !anyDeclaredEnv(declared.Env) {
 				add(codes.UndeclaredEnv, "low",
 					fmt.Sprintf("undeclared environment access via %s", d.Symbol),
 					d.Location)

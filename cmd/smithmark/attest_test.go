@@ -495,6 +495,91 @@ func TestAttestMCPTarballMissingPackageJSON(t *testing.T) {
 	}
 }
 
+// fakemcpDeclWithCommand is a fake-mcp declaration that carries BOTH a launch
+// command (the committed fakemcp fixture, reached by a path relative to this
+// package's working directory) and is used alongside --tools-from, so attest
+// cross checks the static listing against the live server (U2 addendum). The
+// name and version match the tarball the agreeing case digests.
+const fakemcpDeclWithCommand = `kind: mcp-server
+name: fakemcp
+version: 0.1.0
+source: npm
+mcp:
+  transports: [stdio]
+  command: [go, run, ../../testdata/fakemcp]
+capabilities:
+  networkEgress: []
+  filesystem: []
+  exec: []
+  env: []
+  secrets: []
+`
+
+// agreeingToolsFile matches the fakemcp fixture's two tools and their exact
+// input schemas, so a live extraction and this file digest identically (U2).
+const agreeingToolsFile = `{
+  "tools": [
+    {"name": "hello_world", "description": "Say hello to someone by name.", "inputSchema": {"type":"object","properties":{"name":{"type":"string"},"loud":{"type":"boolean"}},"required":["name"]}},
+    {"name": "add_numbers", "description": "Add two numbers together.", "inputSchema": {"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}}
+  ]
+}`
+
+// TestAttestToolListingMismatch proves the U2 addendum: with both --tools-from
+// and a declared command, a static listing that disagrees with the live server
+// fails closed with TOOL_LISTING_MISMATCH rather than signing the mismatch. The
+// live fakemcp fixture lists hello_world and add_numbers; the file below names a
+// different tool, so extraction and the file disagree.
+func TestAttestToolListingMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, fakemcpDeclWithCommand)
+	writeTestFile(t, dir, "tools.json", `{"tools":[{"name":"totally_different_tool","inputSchema":{"type":"object"}}]}`)
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.ToolListingMismatch {
+		t.Errorf("code = %q, want %q", line.Code, codes.ToolListingMismatch)
+	}
+	if !strings.Contains(line.Detail, "totally_different_tool") {
+		t.Errorf("detail %q should name the disagreeing tool", line.Detail)
+	}
+}
+
+// TestAttestToolListingAgrees proves the happy path of the same cross check:
+// when --tools-from matches the live server exactly, attest proceeds and signs
+// (here a dry run), so the cross check adds a guard without blocking an honest
+// maker.
+func TestAttestToolListingAgrees(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, fakemcpDeclWithCommand)
+	writeTestFile(t, dir, "tools.json", agreeingToolsFile)
+	writeNPMTarball(t, dir, "fakemcp-0.1.0.tgz", "fakemcp", "0.1.0")
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	stmt, err := manifest.ParseStatement(stdout.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStatement: %v", err)
+	}
+	names := map[string]bool{}
+	for _, tool := range stmt.Predicate.MCP.Tools {
+		names[tool.Name] = true
+	}
+	if !names["hello_world"] || !names["add_numbers"] {
+		t.Errorf("signed tools = %+v, want hello_world and add_numbers", stmt.Predicate.MCP.Tools)
+	}
+}
+
 // writeTestFile writes name under dir with content, failing the test on error.
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()

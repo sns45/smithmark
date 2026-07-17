@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "code": "UNDECLARED_NETWORK_EGRESS",
+      "severity": "high",
+      "detail": "network egress via fetch is not declared in capabilities.networkEgress",
+      "location": "src/index.ts:7"
+    }
+  ]
+}

@@ -293,6 +293,69 @@ func TestGapsDeterministic(t *testing.T) {
 	}
 }
 
+// TestGapsBlankDeclaredEntryIsIgnored proves the defensive blank hygiene: a
+// declaration carrying only a blank entry for a class (an egress rule with an
+// empty host, an fs rule with an empty path, an exec rule with an empty
+// binary, or an empty env string) does not suppress a detected gap in that
+// class, so a stray blank never masks a real finding. A validated
+// CapabilitySet never carries such an entry, but Gaps must not depend on the
+// caller having validated first.
+func TestGapsBlankDeclaredEntryIsIgnored(t *testing.T) {
+	cases := []struct {
+		name      string
+		declared  manifest.CapabilitySet
+		detection lint.Detection
+		wantCode  string
+	}{
+		{
+			name:      "blank egress host does not suppress network",
+			declared:  manifest.CapabilitySet{NetworkEgress: []manifest.EgressRule{{Host: ""}}},
+			detection: lint.Detection{Class: "network", Symbol: "fetch", Location: "a.ts:1"},
+			wantCode:  codes.UndeclaredNetworkEgress,
+		},
+		{
+			name:      "blank fs path does not suppress filesystem",
+			declared:  manifest.CapabilitySet{Filesystem: []manifest.FSRule{{Path: "", Access: "read"}}},
+			detection: lint.Detection{Class: "filesystem", Symbol: "fs", Location: "a.ts:1"},
+			wantCode:  codes.UndeclaredFilesystem,
+		},
+		{
+			name:      "blank exec binary does not suppress exec",
+			declared:  manifest.CapabilitySet{Exec: []manifest.ExecRule{{Binary: ""}}},
+			detection: lint.Detection{Class: "exec", Symbol: "child_process", Location: "a.ts:1"},
+			wantCode:  codes.UndeclaredExec,
+		},
+		{
+			name:      "blank env string does not suppress bare env access",
+			declared:  manifest.CapabilitySet{Env: []string{""}},
+			detection: lint.Detection{Class: "env", Symbol: "process.env", Location: "a.ts:1"},
+			wantCode:  codes.UndeclaredEnv,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			findings := lint.Gaps(c.declared, []lint.Detection{c.detection})
+			if len(findings) != 1 {
+				t.Fatalf("Gaps() = %+v, want exactly 1 finding (blank entry must not suppress)", findings)
+			}
+			if findings[0].Code != c.wantCode {
+				t.Errorf("Code = %q, want %q", findings[0].Code, c.wantCode)
+			}
+		})
+	}
+}
+
+// TestGapsIgnoresUnknownClass guards the class switch invariant: a Detection
+// whose Class is none of the four the detectors ever emit (network,
+// filesystem, exec, env) produces no Finding at all, rather than a spurious
+// one or a panic.
+func TestGapsIgnoresUnknownClass(t *testing.T) {
+	dets := []lint.Detection{{Class: "telemetry", Symbol: "beacon", Location: "a.ts:1"}}
+	if findings := lint.Gaps(manifest.CapabilitySet{}, dets); len(findings) != 0 {
+		t.Fatalf("Gaps() = %+v, want none for an unknown detection class", findings)
+	}
+}
+
 // TestGapsIntegratesWithDetectJS is a small end to end check that Gaps
 // wires correctly against real DetectJS output, not just hand built
 // Detection literals.
