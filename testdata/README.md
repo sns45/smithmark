@@ -135,17 +135,22 @@ test).
 - **Source requests**:
   - `GET https://registry.npmjs.org/@modelcontextprotocol/server-filesystem`
   - `GET https://registry.npmjs.org/-/npm/v1/attestations/@modelcontextprotocol/server-filesystem@2026.7.10`
-- **`packument.json` trim**: `pkg/discover/npm.go`'s `packument` type decodes
-  strictly (`json.Decoder.DisallowUnknownFields`, which applies recursively
-  through map values), so this fixture keeps only the fields that type models:
-  the top level `name` and `dist-tags`, and, for the single `2026.7.10` version
-  entry, only `dist.integrity` and `dist.tarball`. A real packument carries many
-  more fields (author, maintainers, time, readme, per version scripts and
-  dependencies, and more, on every historical version it ever published); all
-  of that was deliberately removed. A real, untrimmed packument would fail this
-  strict decode, which is exactly the point: the committed fixture is what
-  proves the strict shape is exactly right, not a coincidence of a lenient
-  parse.
+- **`packument.json` trim**: a packument is a foreign, npm owned format, so
+  `pkg/discover/npm.go`'s `packument` type decodes it leniently (a plain
+  `json.Unmarshal`, not `DisallowUnknownFields`), matching this codebase's
+  existing posture for every other format it does not control the schema of
+  (the attestations response below, package.json's smithmark key, SKILL.md
+  frontmatter). The fixture is still trimmed down from the full real
+  packument, but only for size, not for decode correctness: it keeps the top
+  level `name`, `_id`, `_rev`, `description`, `maintainers`, and a `time` block
+  with just `created` and `modified`, and, for the single `2026.7.10` version
+  entry, `name`, `version`, `scripts`, and a `dist` block with `integrity`,
+  `tarball`, `shasum`, `fileCount`, and `unpackedSize`. Every one of those
+  fields beyond `dist.integrity` and `dist.tarball` is realistic noise this
+  package's `packument` type does not model and never reads; it is committed
+  deliberately, not accidentally, so the fixture itself pins the lenient
+  posture: a strict decoder would reject every one of them, and this fixture
+  proves the implementation does not.
 - **`attestations.json`**: committed close to verbatim (undisturbed field
   values; only whitespace may differ from the live response), since
   `fetchNPMProvenance` in `pkg/discover/npm.go` decodes this response leniently

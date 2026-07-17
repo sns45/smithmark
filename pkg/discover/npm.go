@@ -29,14 +29,24 @@ const defaultNPMRegistry = "https://registry.npmjs.org"
 // provenance specifically, not every attestation npm happens to hold.
 const npmProvenancePredicateType = "https://slsa.dev/provenance/v1"
 
-// packument is the strict, minimal shape this package decodes an npm
-// packument into. Only the fields Resolve actually consumes survive strict
-// decoding (DisallowUnknownFields applies recursively, including through map
-// values): a real packument carries many more fields than this type models
-// (author, maintainers, time, readme, per version scripts and
-// dependencies...), which is why the committed fixture
-// (testdata/npm/packument.json) is a trimmed copy of a real packument rather
-// than the real thing verbatim.
+// packument is the shape this package decodes an npm packument into. A
+// packument is a foreign, community owned format npm controls the schema of,
+// not a smithmark authoring surface, so it is decoded leniently (a plain
+// json.Unmarshal, not DisallowUnknownFields), matching this codebase's
+// existing posture for every other format outside its own control: the npm
+// attestations endpoint response below, package.json's smithmark key in
+// attestbase.go, and SKILL.md frontmatter in local.go. Only the fields this
+// type models are read; a real packument carries many more (author,
+// maintainers, time, readme, per version scripts and dependencies, and
+// more, repeated across every historical version it ever published), and
+// every one of them is ignored rather than rejected. In contrast, smithmark's
+// own formats (smithmark.yaml, the capability manifest) stay strict
+// (DisallowUnknownFields), because those schemas are ours to keep exact.
+// What stays loud regardless of this leniency is a needed field being
+// missing or malformed: an absent version entry (resolveVersionKey returns
+// false) and a malformed or absent dist.integrity (npmIntegrityToHex
+// rejects it) both still fail resolution, they just do not fail merely
+// because the packument carries extra fields this type does not model.
 type packument struct {
 	Name     string                      `json:"name"`
 	DistTags map[string]string           `json:"dist-tags"`
@@ -89,9 +99,10 @@ func httpClient(opts ResolveOptions) *http.Client {
 	return &http.Client{Transport: opts.Transport}
 }
 
-// fetchPackument GETs {registry}/{name} and strictly decodes the response
-// into a packument. Any request construction failure, transport error,
-// non 200 status, or undecodable body is DISCOVERY_FAILED: unlike the
+// fetchPackument GETs {registry}/{name} and leniently decodes the response
+// into a packument (see that type's doc comment for why leniently). Any
+// request construction failure, transport error, non 200 status, or body
+// that fails even a lenient decode is DISCOVERY_FAILED: unlike the
 // attestations endpoint, a packument is not optional metadata, so there is
 // no tolerated absence here.
 func fetchPackument(ctx context.Context, opts ResolveOptions, name string) (*packument, error) {
@@ -109,10 +120,12 @@ func fetchPackument(ctx context.Context, opts ResolveOptions, name string) (*pac
 		return nil, codes.E(codes.DiscoveryFailed, "fetching packument for %s: unexpected status %s", name, resp.Status)
 	}
 
-	dec := json.NewDecoder(resp.Body)
-	dec.DisallowUnknownFields()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, codes.E(codes.DiscoveryFailed, "reading packument body for %s: %v", name, err)
+	}
 	var pkg packument
-	if err := dec.Decode(&pkg); err != nil {
+	if err := json.Unmarshal(body, &pkg); err != nil {
 		return nil, codes.E(codes.DiscoveryFailed, "decoding packument for %s: %v", name, err)
 	}
 	return &pkg, nil
@@ -184,7 +197,7 @@ func resolveNPMIdentity(ctx context.Context, name, version string, opts ResolveO
 		Source:  manifest.SourceNPM,
 		Digest:  manifest.DigestSet{"sha512": digestHex},
 	}
-	notes := []string{fmt.Sprintf("resolved npm package %s@%s via the packument at %s", name, verKey, registryBase(opts))}
+	notes := []string{notef(NoteNPMResolved, "resolved npm package %s@%s via the packument at %s", name, verKey, registryBase(opts))}
 	return ref, notes, nil
 }
 
@@ -207,7 +220,7 @@ func fetchNPMProvenance(ctx context.Context, opts ResolveOptions, name, version 
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, []string{fmt.Sprintf("no npm provenance found for %s@%s (404)", name, version)}, nil
+		return nil, []string{notef(NoteNoProvenance, "no npm provenance found for %s@%s (404)", name, version)}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, codes.E(codes.DiscoveryFailed, "fetching npm provenance for %s@%s: unexpected status %s", name, version, resp.Status)
@@ -223,8 +236,8 @@ func fetchNPMProvenance(ctx context.Context, opts ResolveOptions, name, version 
 	}
 	for _, a := range parsed.Attestations {
 		if a.PredicateType == npmProvenancePredicateType {
-			return []byte(a.Bundle), []string{fmt.Sprintf("found npm provenance attestation for %s@%s", name, version)}, nil
+			return []byte(a.Bundle), []string{notef(NoteProvenanceFound, "found npm provenance attestation for %s@%s", name, version)}, nil
 		}
 	}
-	return nil, []string{fmt.Sprintf("npm attestations present for %s@%s but none carry the SLSA provenance predicate", name, version)}, nil
+	return nil, []string{notef(NoteProvenanceNoMatch, "npm attestations present for %s@%s but none carry the SLSA provenance predicate", name, version)}, nil
 }

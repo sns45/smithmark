@@ -100,6 +100,41 @@ func (p poisonTarget) Predecessors(context.Context, ocispec.Descriptor) ([]ocisp
 	return nil, nil
 }
 
+// --- poison HTTP transport ---------------------------------------------------
+
+// poisonTransport implements http.RoundTripper by failing the test on any
+// call. It stands in for "this argument form must never touch the npm
+// registry" in tests whose argument never reaches the npm request path (a
+// local skill directory, an OCI reference, or an argument Resolve rejects
+// before any network call), pairing with poisonTarget's identical role for
+// the OCI target.
+type poisonTransport struct{ t *testing.T }
+
+func (p poisonTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	p.t.Fatalf("poisonTransport: unexpected request %s %s; this test path should never touch the npm registry", req.Method, req.URL.String())
+	return nil, fmt.Errorf("unreachable")
+}
+
+// mustResolveOptions builds a discover.ResolveOptions for a test, guarding a
+// specific footgun: a nil Transport combined with the real npm registry
+// default (an empty Registry) means net/http's own documented fallback,
+// http.DefaultTransport, would silently reach the real network the moment
+// any code path in the test calls the npm registry. Every ResolveOptions
+// literal in this file is built through this helper, so a test that forgets
+// to inject a transport fails immediately at construction time, loudly and
+// long before any request would go out, rather than possibly passing by
+// accident today and making a live request once some later change in this
+// file makes the npm path reachable. A test whose argument form never
+// touches npm at all still passes poisonTransport rather than leaving
+// Transport unset, so the guard has no exception to remember.
+func mustResolveOptions(t *testing.T, opts discover.ResolveOptions) discover.ResolveOptions {
+	t.Helper()
+	if opts.Transport == nil && opts.Registry == "" {
+		t.Fatal("mustResolveOptions: Transport is nil while Registry is the real npm default; pass a fixture transport, or poisonTransport if this path must never touch npm")
+	}
+	return opts
+}
+
 // --- shared fixture data -----------------------------------------------------
 
 const (
@@ -168,7 +203,24 @@ func assertCode(t *testing.T, err error, code string) {
 	}
 }
 
-func notesContain(notes []string, substr string) bool {
+// notesHavePrefix reports whether any entry in notes begins with one of
+// discover's exported Note* constants (see resolve.go's notef helper): the
+// stable, machine readable check Task 3.3 is expected to use, tested here
+// against the constants themselves rather than restated prose substrings.
+func notesHavePrefix(notes []string, prefix string) bool {
+	for _, n := range notes {
+		if strings.HasPrefix(n, prefix+": ") {
+			return true
+		}
+	}
+	return false
+}
+
+// notesContainSubstring reports whether any entry in notes contains substr
+// anywhere, for asserting on a note's detail text (for example, that it names
+// a specific path), as distinct from notesHavePrefix's check of the stable
+// prefix token itself.
+func notesContainSubstring(notes []string, substr string) bool {
 	for _, n := range notes {
 		if strings.Contains(n, substr) {
 			return true
@@ -197,11 +249,11 @@ func TestResolveNPMArgFullRoundTrip(t *testing.T) {
 		t.Fatalf("seeding fixture tag: %v", err)
 	}
 
-	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, discover.ResolveOptions{
+	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
 		Target:    target,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -253,11 +305,11 @@ func TestResolveNPMArgAbsentTagIsNotAnError(t *testing.T) {
 	tr := npmTransport(t, http.StatusNotFound, nil)
 	target := memory.New() // nothing pushed
 
-	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, discover.ResolveOptions{
+	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
 		Target:    target,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -267,8 +319,11 @@ func TestResolveNPMArgAbsentTagIsNotAnError(t *testing.T) {
 	if got.NPMProvenance != nil {
 		t.Errorf("NPMProvenance = %q, want nil (404 tolerated)", got.NPMProvenance)
 	}
-	if !notesContain(got.Notes, "no attestation tag") && !notesContain(got.Notes, "no npm provenance") {
-		t.Errorf("notes = %v, want a note about the absent tag or absent provenance", got.Notes)
+	if !notesHavePrefix(got.Notes, discover.NoteNoAttestationTag) {
+		t.Errorf("notes = %v, want a %s note for the absent tag", got.Notes, discover.NoteNoAttestationTag)
+	}
+	if !notesHavePrefix(got.Notes, discover.NoteNoProvenance) {
+		t.Errorf("notes = %v, want a %s note for the absent provenance", got.Notes, discover.NoteNoProvenance)
 	}
 }
 
@@ -278,10 +333,10 @@ func TestResolveNPMArgUnexpectedPackumentStatusFails(t *testing.T) {
 	tr := newFixtureTransport(t)
 	tr.serve(http.MethodGet, "/"+fixtureNPMName, http.StatusInternalServerError, []byte("boom"))
 
-	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, discover.ResolveOptions{
+	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
-	})
+	}))
 	assertCode(t, err, codes.DiscoveryFailed)
 }
 
@@ -292,10 +347,28 @@ func TestResolveNPMArgUnknownVersionFails(t *testing.T) {
 	tr := newFixtureTransport(t)
 	tr.serve(http.MethodGet, "/"+fixtureNPMName, http.StatusOK, readFile(t, fixturePackumentPath))
 
-	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@9.9.9-does-not-exist", discover.ResolveOptions{
+	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@9.9.9-does-not-exist", mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
-	})
+	}))
+	assertCode(t, err, codes.DiscoveryFailed)
+}
+
+// TestResolveNPMArgMalformedBaseFails asserts an attestation base whose path
+// segment violates the OCI repository path grammar (here, an uppercase
+// segment) is a DISCOVERY_FAILED error, not silently treated as zero
+// bundles. Reachability argument (the CRITICAL fix this pins): a source with
+// no canonical attestation home at all short circuits earlier in
+// discoverByTag on an empty digest, so this AttestationRef call is reached
+// only by a genuine grammar or name problem, and every one of those must be
+// loud.
+func TestResolveNPMArgMalformedBaseFails(t *testing.T) {
+	tr := npmTransport(t, http.StatusNotFound, nil)
+
+	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
+		Base:      testBase + "/BadSegment",
+		Transport: tr,
+	}))
 	assertCode(t, err, codes.DiscoveryFailed)
 }
 
@@ -310,10 +383,10 @@ func TestResolveSurfacesAttestationBaseUnknown(t *testing.T) {
 	tr := newFixtureTransport(t)
 	tr.serve(http.MethodGet, "/"+fixtureNPMName, http.StatusOK, readFile(t, fixturePackumentPath))
 
-	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, discover.ResolveOptions{
+	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Transport: tr,
 		Target:    memory.New(),
-	})
+	}))
 	assertCode(t, err, codes.AttestationBaseUnknown)
 }
 
@@ -330,9 +403,10 @@ func TestResolveLocalDirBaseFromPackageJSON(t *testing.T) {
 	writeFile(t, filepath.Join(root, "package.json"), []byte(`{"smithmark":{"attestationBase":"`+testBase+`"}}`))
 
 	target := memory.New()
-	got, err := discover.Resolve(context.Background(), root, discover.ResolveOptions{
-		Target: target,
-	})
+	got, err := discover.Resolve(context.Background(), root, mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // this argument form is a skill; npm must never be touched
+		Target:    target,
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -387,10 +461,11 @@ func TestResolveLocalSkillDirectory(t *testing.T) {
 		t.Fatalf("seeding fixture tag: %v", err)
 	}
 
-	got, err := discover.Resolve(context.Background(), skillFixtureRoot, discover.ResolveOptions{
-		Base:   testBase,
-		Target: target,
-	})
+	got, err := discover.Resolve(context.Background(), skillFixtureRoot, mustResolveOptions(t, discover.ResolveOptions{
+		Base:      testBase,
+		Transport: poisonTransport{t: t}, // this argument form is a skill; npm must never be touched
+		Target:    target,
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -430,11 +505,11 @@ func TestResolveLocalNPMSourcedDirectory(t *testing.T) {
 		t.Fatalf("seeding fixture tag: %v", err)
 	}
 
-	got, err := discover.Resolve(context.Background(), root, discover.ResolveOptions{
+	got, err := discover.Resolve(context.Background(), root, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
 		Target:    target,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -463,12 +538,12 @@ func TestResolveBundlePathWinsOverDiscovery(t *testing.T) {
 	explicitBytes := []byte(`{"explicit":"bundle"}`)
 	writeFile(t, bundlePath, explicitBytes)
 
-	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, discover.ResolveOptions{
+	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Base:       testBase,
 		BundlePath: bundlePath,
 		Transport:  tr,
 		Target:     poisonTarget{t: t},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -478,7 +553,10 @@ func TestResolveBundlePathWinsOverDiscovery(t *testing.T) {
 	if got.NPMProvenance != nil {
 		t.Error("NPMProvenance should be nil when --bundle wins over discovery")
 	}
-	if !notesContain(got.Notes, bundlePath) {
+	if !notesHavePrefix(got.Notes, discover.NoteExplicitBundle) {
+		t.Errorf("notes = %v, want a %s note", got.Notes, discover.NoteExplicitBundle)
+	}
+	if !notesContainSubstring(got.Notes, bundlePath) {
 		t.Errorf("notes = %v, want a note naming the explicit bundle path", got.Notes)
 	}
 	// Ref identity is still fully resolved even in bundle path mode.
@@ -490,7 +568,9 @@ func TestResolveBundlePathWinsOverDiscovery(t *testing.T) {
 // --- unrecognized argument ----------------------------------------------------
 
 func TestResolveUnrecognizedArgumentFails(t *testing.T) {
-	_, err := discover.Resolve(context.Background(), "totally-not-a-recognized-shape", discover.ResolveOptions{})
+	_, err := discover.Resolve(context.Background(), "totally-not-a-recognized-shape", mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // an unrecognized argument must never reach the npm registry
+	}))
 	assertCode(t, err, codes.DiscoveryFailed)
 }
 
@@ -526,9 +606,10 @@ func TestResolveOCIRefUsesReferrers(t *testing.T) {
 		t.Fatalf("AttachReferrer: %v", err)
 	}
 
-	got, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", discover.ResolveOptions{
-		Target: target,
-	})
+	got, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
+		Target:    target,
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -564,9 +645,10 @@ func TestResolveOCIRefNoMatchingReferrers(t *testing.T) {
 		t.Fatalf("tagging fabricated subject: %v", err)
 	}
 
-	got, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", discover.ResolveOptions{
-		Target: target,
-	})
+	got, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
+		Target:    target,
+	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

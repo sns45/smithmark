@@ -7,7 +7,6 @@ package discover
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -103,7 +102,7 @@ func resolveOCIIdentity(ctx context.Context, arg string, opts ResolveOptions) (m
 		Source: manifest.SourceOCI,
 		Digest: manifest.DigestSet{desc.Digest.Algorithm().String(): desc.Digest.Encoded()},
 	}
-	notes := []string{fmt.Sprintf("resolved oci reference %q to digest %s via the injected target", arg, desc.Digest)}
+	notes := []string{notef(NoteOCIResolved, "resolved oci reference %q to digest %s via the injected target", arg, desc.Digest)}
 	return ref, desc, notes, nil
 }
 
@@ -130,6 +129,6 @@ func discoverReferrers(ctx context.Context, target oras.ReadOnlyGraphTarget, sub
 		}
 		bundles = append(bundles, layers...)
 	}
-	notes := []string{fmt.Sprintf("found %d referrer(s), %d sigstore bundle candidate(s)", len(referrers), len(bundles))}
+	notes := []string{notef(NoteReferrers, "found %d referrer(s), %d sigstore bundle candidate(s)", len(referrers), len(bundles))}
 	return bundles, notes, nil
 }

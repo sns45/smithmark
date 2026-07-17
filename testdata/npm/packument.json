@@ -1,14 +1,63 @@
 {
+  "_id": "@modelcontextprotocol/server-filesystem",
+  "_rev": "23-d189d35755eeced276ccbc10448771b3",
+  "description": "MCP server for filesystem access",
   "dist-tags": {
     "latest": "2026.7.10"
   },
+  "maintainers": [
+    {
+      "email": "justin@jspahrsummers.com",
+      "name": "jspahrsummers"
+    },
+    {
+      "email": "paul@modelcontextprotocol.io",
+      "name": "pcarleton"
+    },
+    {
+      "email": "fweinberger@anthropic.com",
+      "name": "fweinberger"
+    },
+    {
+      "email": "david@modelcontextprotocol.io",
+      "name": "thedsp"
+    },
+    {
+      "email": "ashwin@anthropic.com",
+      "name": "ashwin-ant"
+    },
+    {
+      "email": "ochafik@anthropic.com",
+      "name": "ochafik-ant"
+    },
+    {
+      "email": "cliff@futurescale.com",
+      "name": "cliffhall"
+    }
+  ],
   "name": "@modelcontextprotocol/server-filesystem",
+  "time": {
+    "created": "2024-11-21T19:14:54.330Z",
+    "modified": "2026-07-10T03:31:11.295Z"
+  },
   "versions": {
     "2026.7.10": {
+      "_id": "@modelcontextprotocol/server-filesystem@2026.7.10",
       "dist": {
+        "fileCount": 7,
         "integrity": "sha512-Mmjg4anFBD5OzbPnGJOA0jPPN8645ERhQk38HQLpSenx1ox9bfdPkmAzUnNjeQtqQGFLtKe13J20RtLBmUKMZA==",
-        "tarball": "https://registry.npmjs.org/@modelcontextprotocol/server-filesystem/-/server-filesystem-2026.7.10.tgz"
-      }
+        "shasum": "b19597401bfbf055662eb9bc9bd92f13ecaf5661",
+        "tarball": "https://registry.npmjs.org/@modelcontextprotocol/server-filesystem/-/server-filesystem-2026.7.10.tgz",
+        "unpackedSize": 69088
+      },
+      "name": "@modelcontextprotocol/server-filesystem",
+      "scripts": {
+        "build": "tsc && shx chmod +x dist/*.js",
+        "prepare": "npm run build",
+        "test": "vitest run --coverage",
+        "watch": "tsc --watch"
+      },
+      "version": "2026.7.10"
     }
   }
 }

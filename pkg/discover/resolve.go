@@ -39,11 +39,14 @@ type ResolveOptions struct {
 	Base string
 	// BundlePath is the explicit --bundle path. When set, it wins over all
 	// attestation discovery (controller resolution 3): Resolve reads this
-	// file directly for Discovered.Bundles and never queries opts.Target or
-	// npm's provenance endpoint. Artifact identity (Discovered.Ref) is still
-	// resolved normally from arg, since a subject digest is needed for
-	// verification's digest match check regardless of where the bundle bytes
-	// came from.
+	// file directly for Discovered.Bundles and never queries opts.Target for
+	// attestation discovery, and never calls npm's provenance endpoint.
+	// Artifact identity (Discovered.Ref) is still resolved normally from arg,
+	// since a subject digest is needed for verification's digest match check
+	// regardless of where the bundle bytes came from; for an OCI reference
+	// argument specifically, that identity resolution step still queries
+	// opts.Target once, to resolve the reference to a subject descriptor,
+	// even though the referrers query that would otherwise follow never runs.
 	BundlePath string
 	// Transport is the http.RoundTripper every npm registry request is sent
 	// through. A nil value means http.DefaultTransport (net/http's own
@@ -72,6 +75,71 @@ type Discovered struct {
 	Bundles       [][]byte
 	NPMProvenance []byte
 	Notes         []string
+}
+
+// Note prefixes: every entry Resolve appends to Discovered.Notes begins with
+// exactly one of these, followed by ": " and a human readable detail (see
+// notef below). They are exported and stable so a downstream caller, such as
+// Task 3.3's verification stage, can key off the prefix rather than parsing
+// prose, and so a later change to the wording after the colon never breaks
+// that caller.
+const (
+	// NoteExplicitBundle reports that opts.BundlePath was set, so Bundles
+	// came from that file and attestation discovery was skipped entirely.
+	NoteExplicitBundle = "EXPLICIT_BUNDLE"
+	// NoteNoDigest reports that no digest was resolved for the artifact at
+	// all, so OCI backed attestation discovery (the D3 tag mapped path) was
+	// skipped for lack of anything to map onto a tag.
+	NoteNoDigest = "NO_DIGEST"
+	// NoteNoDigestForSource reports that a local directory's declared
+	// kind/source combination has no digest resolution path in v0.1 (only a
+	// skill, or an mcp-server sourced from npm, do); identity is declaration
+	// only.
+	NoteNoDigestForSource = "NO_DIGEST_FOR_SOURCE"
+	// NoteNoOCITarget reports that opts.Target was nil, so the D3 tag mapped
+	// fetch was skipped.
+	NoteNoOCITarget = "NO_OCI_TARGET"
+	// NoteNoAttestationTag reports that the D3 mapped tag was resolved but
+	// does not exist in opts.Target: an absent tag, not an error (U3 assigns
+	// that meaning to verification's ATTESTATION_MISSING check).
+	NoteNoAttestationTag = "NO_ATTESTATION_TAG"
+	// NoteAttestationTag reports that the D3 mapped tag was found in
+	// opts.Target, with the candidate bundle count that yielded.
+	NoteAttestationTag = "ATTESTATION_TAG_FOUND"
+	// NoteLocalSkill reports that a local directory argument resolved to a
+	// skill, with its bundle digest recomputed via the walker.
+	NoteLocalSkill = "LOCAL_SKILL_RESOLVED"
+	// NoteLocalNPM reports that a local directory argument declaring source
+	// npm resolved its digest via the packument.
+	NoteLocalNPM = "LOCAL_NPM_RESOLVED"
+	// NoteNPMResolved reports that an npm package was resolved via its
+	// packument (the pure npm argument form).
+	NoteNPMResolved = "NPM_RESOLVED"
+	// NoteNoProvenance reports that npm's attestations endpoint returned 404
+	// for this package version: most packages carry no provenance at all,
+	// tolerated rather than an error.
+	NoteNoProvenance = "NO_PROVENANCE"
+	// NoteProvenanceFound reports that npm's attestations endpoint carried an
+	// entry whose predicateType is npm's SLSA provenance predicate.
+	NoteProvenanceFound = "PROVENANCE_FOUND"
+	// NoteProvenanceNoMatch reports that npm's attestations endpoint returned
+	// attestations, but none of them carry the SLSA provenance predicate.
+	NoteProvenanceNoMatch = "PROVENANCE_NO_MATCH"
+	// NoteOCIResolved reports that an OCI reference argument resolved to a
+	// subject descriptor via opts.Target.
+	NoteOCIResolved = "OCI_RESOLVED"
+	// NoteReferrers reports the outcome of the OCI referrers query: how many
+	// referrers were found and how many of them matched the sigstore bundle
+	// media type family.
+	NoteReferrers = "REFERRERS"
+)
+
+// notef formats one Discovered.Notes entry: prefix, a colon and a space, then
+// format and args rendered through fmt.Sprintf. Every note this package
+// produces is built through this helper, so the prefix and the separator can
+// never drift apart between call sites.
+func notef(prefix, format string, args ...any) string {
+	return prefix + ": " + fmt.Sprintf(format, args...)
 }
 
 // identity is Resolve's intermediate result before any attestation discovery
@@ -113,7 +181,7 @@ func Resolve(ctx context.Context, arg string, opts ResolveOptions) (*Discovered,
 			return nil, codes.E(codes.DiscoveryFailed, "reading explicit bundle %s: %v", opts.BundlePath, err)
 		}
 		d.Bundles = [][]byte{data}
-		d.Notes = append(d.Notes, fmt.Sprintf("using explicit bundle %s; attestation discovery skipped", opts.BundlePath))
+		d.Notes = append(d.Notes, notef(NoteExplicitBundle, "using explicit bundle %s; attestation discovery skipped", opts.BundlePath))
 		return d, nil
 	}
 
@@ -213,8 +281,19 @@ func resolveLocalIdentity(ctx context.Context, root string, opts ResolveOptions)
 		if ref.Version == "" && info.Version != "" {
 			ref.Version = info.Version
 		}
-		notes = append(notes, fmt.Sprintf("resolved skill %q from local directory %s; bundle digest recomputed via the walker", ref.Name, root))
+		notes = append(notes, notef(NoteLocalSkill, "resolved skill %q from local directory %s; bundle digest recomputed via the walker", ref.Name, root))
 	case ref.Source == manifest.SourceNPM:
+		// Deliberately verifies against what npm published, not against
+		// whatever sits on disk in this local checkout: attest's
+		// TarballDigest (Task 2.x) digests a local *.tgz tarball directly,
+		// because attest is asserting a claim about a concrete artifact the
+		// maker is about to publish. Resolve's job here is discovery for
+		// verification, which must check the artifact a consumer would
+		// actually install from npm, so fetching the packument's own
+		// dist.integrity is the correct digest source even when the caller
+		// pointed Resolve at a local source checkout. This is a deliberate
+		// divergence from attest's tarball based digest, not an
+		// inconsistency to reconcile.
 		npmRef, npmNotes, err := resolveNPMIdentity(ctx, ref.Name, ref.Version, opts)
 		if err != nil {
 			return nil, err
@@ -222,9 +301,9 @@ func resolveLocalIdentity(ctx context.Context, root string, opts ResolveOptions)
 		ref.Digest = npmRef.Digest
 		ref.Version = npmRef.Version
 		notes = append(notes, npmNotes...)
-		notes = append(notes, fmt.Sprintf("resolved npm identity for local directory %s via the packument", root))
+		notes = append(notes, notef(NoteLocalNPM, "resolved npm identity for local directory %s via the packument", root))
 	default:
-		notes = append(notes, fmt.Sprintf("no digest resolution available for source %q at %s; identity is declaration only", ref.Source, root))
+		notes = append(notes, notef(NoteNoDigestForSource, "no digest resolution available for source %q at %s; identity is declaration only", ref.Source, root))
 	}
 
 	return &identity{ref: ref, artifactRoot: root, notes: notes}, nil
@@ -253,17 +332,24 @@ func parseNPMArg(arg string) (name, version string, ok bool) {
 // uses the tag mapped path: the pure npm argument, and a local directory
 // resolving to a skill or an npm sourced mcp-server.
 //
-// Every "nothing to find" outcome is a note, never an error: no digest at all
-// (nothing to map), a ref this scheme does not map (REF_UNMAPPABLE, for
-// example a local sourced mcp-server with no canonical attestation home yet),
-// no OCI target configured, and an absent tag (errdef.ErrNotFound) are all
-// recorded and return zero bundles. Only ATTESTATION_BASE_UNKNOWN from
-// ResolveAttestationBase and any other, unexpected opts.Target error surface
-// as DISCOVERY_FAILED (or, for the base error, verbatim, per controller
-// resolution 4).
+// Only two outcomes are notes, never errors: no OCI target configured, and an
+// absent tag (errdef.ErrNotFound), both of which mean "nothing found," not
+// "something went wrong" (U3 assigns failure meaning to verification's
+// ATTESTATION_MISSING check, not to discovery). Every ref this function is
+// ever called with already carries a digest (the len(ref.Digest) == 0 check
+// above short circuits first, before this point, for the sources that have no
+// canonical attestation home at all: a local sourced or mcp-registry sourced
+// mcp-server never reaches here with a digest to map). That means
+// AttestationRef can only fail here on an operational grammar or name
+// problem, such as a malformed attestation base or a name segment that does
+// not fit the OCI repository path grammar, never on "this source has no
+// mapping": every such failure is therefore DISCOVERY_FAILED, wrapping the
+// cause, not a silently swallowed note. ATTESTATION_BASE_UNKNOWN from
+// ResolveAttestationBase surfaces verbatim (controller resolution 4); any
+// other, unexpected opts.Target error is also DISCOVERY_FAILED.
 func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.ArtifactRef, artifactRoot string) ([][]byte, []string, error) {
 	if len(ref.Digest) == 0 {
-		return nil, []string{"no digest resolved for this artifact; skipping OCI backed attestation discovery"}, nil
+		return nil, []string{notef(NoteNoDigest, "no digest resolved for this artifact; skipping OCI backed attestation discovery")}, nil
 	}
 
 	base, err := ResolveAttestationBase(opts.Base, artifactRoot)
@@ -273,17 +359,17 @@ func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.Artifa
 
 	_, tag, err := AttestationRef(base, ref)
 	if err != nil {
-		return nil, []string{fmt.Sprintf("no OCI attestation mapping for this artifact: %v", err)}, nil
+		return nil, nil, codes.E(codes.DiscoveryFailed, "mapping attestation ref for %s %q: %v", ref.Kind, ref.Name, err)
 	}
 
 	if opts.Target == nil {
-		return nil, []string{"no OCI target configured; skipping tag based attestation discovery"}, nil
+		return nil, []string{notef(NoteNoOCITarget, "no OCI target configured; skipping tag based attestation discovery")}, nil
 	}
 
 	desc, err := opts.Target.Resolve(ctx, tag)
 	if err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
-			return nil, []string{fmt.Sprintf("no attestation tag %s found", tag)}, nil
+			return nil, []string{notef(NoteNoAttestationTag, "no attestation tag %s found", tag)}, nil
 		}
 		return nil, nil, codes.E(codes.DiscoveryFailed, "resolving attestation tag %s: %v", tag, err)
 	}
@@ -292,7 +378,7 @@ func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.Artifa
 	if err != nil {
 		return nil, nil, err
 	}
-	notes := []string{fmt.Sprintf("found attestation tag %s with %d bundle candidate(s)", tag, len(bundles))}
+	notes := []string{notef(NoteAttestationTag, "found attestation tag %s with %d bundle candidate(s)", tag, len(bundles))}
 	return bundles, notes, nil
 }
 
