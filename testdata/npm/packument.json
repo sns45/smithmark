@@ -1,0 +1,14 @@
+{
+  "dist-tags": {
+    "latest": "2026.7.10"
+  },
+  "name": "@modelcontextprotocol/server-filesystem",
+  "versions": {
+    "2026.7.10": {
+      "dist": {
+        "integrity": "sha512-Mmjg4anFBD5OzbPnGJOA0jPPN8645ERhQk38HQLpSenx1ox9bfdPkmAzUnNjeQtqQGFLtKe13J20RtLBmUKMZA==",
+        "tarball": "https://registry.npmjs.org/@modelcontextprotocol/server-filesystem/-/server-filesystem-2026.7.10.tgz"
+      }
+    }
+  }
+}

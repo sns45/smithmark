@@ -118,3 +118,47 @@ Consequence for Task 3.3: the cert expiry row of the verification behavior
 matrix must be covered differently from the other rows. It is a keyless concept,
 exercised live against Fulcio in the M6 release workflow, not offline in CI.
 Task 3.3 documents how that row is addressed.
+
+## npm discovery fixtures (`npm/`)
+
+`npm/packument.json` and `npm/attestations.json` are real npm registry
+responses, fetched once during Task 3.2's development (network access is
+allowed for a maintainer preparing fixtures; it is never allowed in CI or in a
+test).
+
+- **Package**: `@modelcontextprotocol/server-filesystem`, version `2026.7.10`
+  (the `latest` dist-tag at fetch time), chosen because it is an
+  `@modelcontextprotocol` scoped MCP server whose latest publish carries both
+  npm's own publish attestation and a SLSA provenance attestation, so the
+  fixture exercises the real shape `pkg/discover/npm.go` reads.
+- **Snapshot date**: 2026-07-16.
+- **Source requests**:
+  - `GET https://registry.npmjs.org/@modelcontextprotocol/server-filesystem`
+  - `GET https://registry.npmjs.org/-/npm/v1/attestations/@modelcontextprotocol/server-filesystem@2026.7.10`
+- **`packument.json` trim**: `pkg/discover/npm.go`'s `packument` type decodes
+  strictly (`json.Decoder.DisallowUnknownFields`, which applies recursively
+  through map values), so this fixture keeps only the fields that type models:
+  the top level `name` and `dist-tags`, and, for the single `2026.7.10` version
+  entry, only `dist.integrity` and `dist.tarball`. A real packument carries many
+  more fields (author, maintainers, time, readme, per version scripts and
+  dependencies, and more, on every historical version it ever published); all
+  of that was deliberately removed. A real, untrimmed packument would fail this
+  strict decode, which is exactly the point: the committed fixture is what
+  proves the strict shape is exactly right, not a coincidence of a lenient
+  parse.
+- **`attestations.json`**: committed close to verbatim (undisturbed field
+  values; only whitespace may differ from the live response), since
+  `fetchNPMProvenance` in `pkg/discover/npm.go` decodes this response leniently
+  (a plain `json.Unmarshal`, matching how this codebase already treats other
+  foreign, community owned formats it does not own the schema of), so no
+  trimming is required for the decode to succeed. It carries two attestations:
+  npm's own publish attestation
+  (`https://github.com/npm/attestation/tree/main/specs/publish/v0.1`) and a
+  SLSA provenance attestation (`https://slsa.dev/provenance/v1`); smithmark's
+  discovery layer identifies and returns only the latter as
+  `Discovered.NPMProvenance`.
+- **Pinned integrity conversion**: `pkg/discover/npm_internal_test.go`'s
+  `TestNPMIntegrityToHexPinnedVector` converts this fixture's own
+  `dist.integrity` value to hex independently (by hand, outside the
+  implementation) and asserts the two agree, so the sha512 base64 to hex
+  conversion (U6) is pinned against a real value, not merely self consistent.

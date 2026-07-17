@@ -242,6 +242,16 @@ const (
 	// so it is not an npm package tarball at all. attest fails closed rather
 	// than guessing which one to attest.
 	AttestSubjectUnresolved = "ATTEST_SUBJECT_UNRESOLVED"
+	// DiscoveryFailed reports that resolving an artifact, or fetching its
+	// metadata or candidate attestations, failed operationally: an
+	// unrecognized CLI argument shape, an npm registry request that could not
+	// be sent or returned an unexpected status, an undecodable packument or
+	// attestations body, or an OCI target error other than an absent tag or
+	// referrer. The absence of attestations themselves, an absent OCI tag, or
+	// no npm provenance found, are never this code; those are recorded as
+	// discovery notes, since verification, not discovery, owns
+	// ATTESTATION_MISSING.
+	DiscoveryFailed = "DISCOVERY_FAILED"
 	// InternalError reports that an error carrying no registry code reached the
 	// command boundary. The CLI maps every failure to a single machine readable
 	// stderr line (decision D4); an error the pure core did not tag with a code
@@ -305,6 +315,7 @@ func All() []string {
 		PublishBundleInvalid,
 		PublishTagInvalid,
 		AttestSubjectUnresolved,
+		DiscoveryFailed,
 		InternalError,
 	}
 }
