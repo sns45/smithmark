@@ -654,19 +654,21 @@ func NewStatement(ref ArtifactRef, m *CapabilityManifest) (*Statement, error) {
 
 	return &Statement{
 		Type:          statementType,
-		Subject:       []Subject{{Name: subjectName(ref), Digest: ref.Digest}},
+		Subject:       []Subject{{Name: SubjectName(ref), Digest: ref.Digest}},
 		PredicateType: PredicateType,
 		Predicate:     m,
 	}, nil
 }
 
-// subjectName builds the in-toto subject name for ref: a purl for npm and
+// SubjectName builds the in-toto subject name for ref: a purl for npm and
 // pypi packages, with a leading @scope percent encoded as %40scope; the
 // plain artifact name for skills, and for every other source, which covers
 // an oci image reference given verbatim in ref.Name (spec 2.3, decision D6).
 // Plain name for the local and mcp-registry sources is a default chosen
-// here, not a spec mandated case.
-func subjectName(ref ArtifactRef) string {
+// here, not a spec mandated case. Exported so pkg/core/verify can build the
+// same subject name for the assayward compatible Evidence block (spec 7,
+// U5) without restating the naming rule.
+func SubjectName(ref ArtifactRef) string {
 	if ref.Kind == KindSkill {
 		return ref.Name
 	}

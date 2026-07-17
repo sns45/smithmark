@@ -45,9 +45,11 @@ type CheckResult struct {
 // VerificationReport is the full result of verifying one artifact. Checks are
 // sorted by Code for determinism. Findings is the capability lint result set,
 // an empty non nil slice until Phase 4 populates it, so it always renders as
-// [] rather than null. Evidence is the assayward compatible evidence block,
-// nil until Task 3.4 fills it, so it renders as null for now. VerifiedAt is the
-// injected clock, never the wall clock.
+// [] rather than null. Evidence is the assayward compatible evidence block
+// (spec 7, U5); Run always leaves it nil, so it renders as null until a
+// caller builds one with EvidenceBlock and assigns it before serializing
+// (Task 3.5 wires the CLI to do exactly that). VerifiedAt is the injected
+// clock, never the wall clock.
 type VerificationReport struct {
 	Subject    manifest.ArtifactRef `json:"subject"`
 	Checks     []CheckResult        `json:"checks"`
@@ -143,6 +145,129 @@ func Run(in Input, sv SignatureVerifier) (*VerificationReport, error) {
 	selected[codes.AttestationMissing] = attestationPresentResult(n, selectedIdx, passedFound)
 	report.Checks = sortChecks(selected)
 	return report, nil
+}
+
+// evidenceImage mirrors assayward's pkg/core.ImageRef (U5): a plain name and a
+// single "<alg>:<hex>" digest string, pinned by contract_test.go against the
+// real assayward module.
+type evidenceImage struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+}
+
+// evidenceAttestation mirrors assayward's pkg/core.Attestation (U5). Envelope
+// is []byte, the same field type assayward uses, so encoding/json's standard
+// base64 handling of byte slices is what makes the two sides round trip
+// without either repo agreeing on an encoding by hand.
+type evidenceAttestation struct {
+	PredicateType string `json:"predicateType"`
+	Envelope      []byte `json:"envelope"`
+	Verified      bool   `json:"verified"`
+	SignatureNote string `json:"signatureNote,omitempty"`
+}
+
+// evidenceBlock mirrors assayward's pkg/core.Evidence (U5). Identity is
+// omitted entirely rather than marshaled as null: smithmark carries no
+// workload identity, and assayward's field is optional (omitempty).
+type evidenceBlock struct {
+	Image        evidenceImage         `json:"image"`
+	Attestations []evidenceAttestation `json:"attestations"`
+	FetchedAt    time.Time             `json:"fetchedAt"`
+}
+
+// EvidenceBlock builds the assayward compatible Evidence block for r (spec 7,
+// U5). bundle is the winning candidate's raw bytes, the same bundle whose
+// outcomes r.Checks already records: the report itself retains no bundle
+// bytes, so the caller (the CLI, Task 3.5) passes them in.
+//
+// Until assayward ships a kind tagged ArtifactRef, the block maps r.Subject
+// into assayward's existing ImageRef{Name, Digest} shape and carries
+// r.Subject.Kind in SignatureNote prose as a shim; the M5 gh issue (Task 5.4)
+// removes it once assayward's Evidence widens to accept a kind directly.
+// Attestations always has exactly one entry: PredicateType is the smithmark
+// agent capability v1 constant, Envelope is the DSSE envelope JSON extracted
+// from bundle's protojson dsseEnvelope field, and Verified is the
+// SIGNATURE_VALID outcome Run already decided, never reevaluated here.
+// FetchedAt is r.VerifiedAt, the injected clock, never the wall clock.
+func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, error) {
+	digest, err := singleDigest(r.Subject.Digest)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := extractDSSEEnvelope(bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	verified := false
+	for _, c := range r.Checks {
+		if c.Code == codes.SignatureValid {
+			verified = c.Passed
+			break
+		}
+	}
+	note := fmt.Sprintf("kind=%s; smithmark agent capability attestation; signature %s",
+		r.Subject.Kind, validityWord(verified))
+
+	block := evidenceBlock{
+		Image: evidenceImage{
+			Name:   manifest.SubjectName(r.Subject),
+			Digest: digest,
+		},
+		Attestations: []evidenceAttestation{{
+			PredicateType: manifest.PredicateType,
+			Envelope:      envelope,
+			Verified:      verified,
+			SignatureNote: note,
+		}},
+		FetchedAt: r.VerifiedAt,
+	}
+	return json.Marshal(block)
+}
+
+// singleDigest renders a DigestSet carrying exactly one algorithm key as
+// "<alg>:<hex>", the shape assayward's ImageRef.Digest expects (U5). A report
+// subject must carry exactly one digest to fit that shape; zero or several
+// keys is the subject's own shape being wrong for this purpose, not an
+// internal failure, so it is coded STATEMENT_SUBJECT_INVALID rather than
+// InternalError.
+func singleDigest(d manifest.DigestSet) (string, error) {
+	if len(d) != 1 {
+		return "", codes.E(codes.StatementSubjectInvalid,
+			"assayward Evidence requires exactly one subject digest, got %d", len(d))
+	}
+	for alg, hex := range d {
+		return alg + ":" + hex, nil
+	}
+	panic("unreachable: len(d) == 1 guarantees exactly one iteration")
+}
+
+// validityWord renders a boolean as the "valid" or "invalid" word
+// SignatureNote's prose carries.
+func validityWord(verified bool) string {
+	if verified {
+		return "valid"
+	}
+	return "invalid"
+}
+
+// extractDSSEEnvelope extracts the dsseEnvelope object of a protojson
+// sigstore bundle as raw JSON bytes, using the same lenient field surgery
+// provenancePredicateType uses for npm provenance below: locating the
+// envelope object embedded in the bundle's own JSON needs no protobuf types
+// and no cryptography, so it stays inside the purity guard without an extra
+// interface hop through SignatureVerifier.
+func extractDSSEEnvelope(bundleBytes []byte) ([]byte, error) {
+	var doc struct {
+		DSSEEnvelope json.RawMessage `json:"dsseEnvelope"`
+	}
+	if err := json.Unmarshal(bundleBytes, &doc); err != nil {
+		return nil, fmt.Errorf("decoding bundle JSON: %w", err)
+	}
+	if len(doc.DSSEEnvelope) == 0 {
+		return nil, errors.New("bundle carries no dsseEnvelope object")
+	}
+	return []byte(doc.DSSEEnvelope), nil
 }
 
 // evaluateCandidate runs the full stage pipeline for a single bundle and
