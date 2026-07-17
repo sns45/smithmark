@@ -186,7 +186,7 @@ established.
   `pkg/discover/registry.go`'s `FetchRegistryEntry` uses is "get specific MCP
   server version" (`GET /v0/servers/{serverName}/versions/{version}`, using
   the special version value `latest`), whose path parameter is documented as
-  a URL-encoded server name (the OpenAPI example is literally
+  a server name encoded for the URL (the OpenAPI example is literally
   `com.example%2Fmy-server`); `FetchRegistryEntry` percent encodes the name
   with `url.PathEscape` before building the request for exactly this reason,
   since a real server name such as `io.github.getsentry/sentry-mcp` would

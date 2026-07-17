@@ -180,3 +180,41 @@ func TestFetchRegistryEntryHasAttRefWhenFieldPresent(t *testing.T) {
 		t.Error("HasAttRef = false with an attestations array present, want true")
 	}
 }
+
+// TestFetchRegistryEntryPyPIOnlyIsNotMistakenForRemoteOnly mirrors the
+// HasAttRef synthetic test pattern above for a different gap: a synthetic
+// entry (no real registry entry sampled while building this fixture set
+// carried this exact shape) whose only package is a non npm ecosystem
+// (pypi here) and which carries no remotes at all. FetchRegistryEntry must
+// decode Packages with that one entry and NPMPackage must find none, so a
+// caller building HOSTED_ENDPOINT_UNSUPPORTED never mistakes this entry for
+// remote only (an empty Packages plus a non empty Remotes): the check
+// itself, and the guard that a "no npm package" entry is not always remote
+// only, is tested in pkg/core/verify's
+// TestRegistryChecksHostedEndpointOtherDistribution.
+func TestFetchRegistryEntryPyPIOnlyIsNotMistakenForRemoteOnly(t *testing.T) {
+	const body = `{
+		"server": {
+			"name": "example.com/pypi-only-server",
+			"packages": [{"registryType": "pypi", "identifier": "example-pypi-pkg", "version": "1.0.0"}],
+			"remotes": []
+		}
+	}`
+	tr := registryTransport(t, "example.com/pypi-only-server", http.StatusOK, []byte(body))
+
+	entry, err := discover.FetchRegistryEntry(context.Background(), "example.com/pypi-only-server", discover.ResolveOptions{
+		Transport: tr,
+	})
+	if err != nil {
+		t.Fatalf("FetchRegistryEntry: %v", err)
+	}
+	if len(entry.Packages) != 1 || entry.Packages[0].Type != "pypi" {
+		t.Fatalf("Packages = %+v, want exactly one pypi package", entry.Packages)
+	}
+	if len(entry.Remotes) != 0 {
+		t.Fatalf("Remotes = %v, want none", entry.Remotes)
+	}
+	if _, ok := entry.NPMPackage(); ok {
+		t.Error("NPMPackage found one; this entry carries only a pypi package")
+	}
+}

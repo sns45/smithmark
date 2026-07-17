@@ -79,8 +79,8 @@ func (e *RegistryEntry) NPMPackage() (RegistryPackage, bool) {
 
 // registryEnvelope captures a "get specific MCP server version" response body
 // with Server left as raw JSON, so RegistryEntry.Raw preserves the server
-// object's exact original bytes rather than a re-marshaled approximation.
-// Decoded leniently (a plain json.Unmarshal, not DisallowUnknownFields): the
+// object's exact original bytes rather than bytes produced by marshaling it
+// again. Decoded leniently (a plain json.Unmarshal, not DisallowUnknownFields): the
 // registry's response, like npm's packument and attestations responses, is a
 // foreign, community owned format this package does not control the schema
 // of; the response's own _meta block (publish status, timestamps) is ignored

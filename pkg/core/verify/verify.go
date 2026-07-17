@@ -537,13 +537,18 @@ func aggregateIssues(issues []manifest.Issue) string {
 // is what would add it), so this fails for every real entry `registry check`
 // fetches; that failure is the RFC gap the command demonstrates.
 //
-// HOSTED_ENDPOINT_UNSUPPORTED fails only when remoteOnly is true: the entry's
-// only distribution shape is a hosted endpoint this build does not attest
-// (v0.1 verifies artifact distributed servers only). Its detail names every
-// entry in remotes. An entry that also carries an npm package is not blocked
-// by declaring remotes too, so remoteOnly false always passes regardless of
-// what remotes holds.
-func RegistryChecks(hasAttRef bool, remoteOnly bool, remotes []string) []CheckResult {
+// HOSTED_ENDPOINT_UNSUPPORTED passes when hasNPM is true: the entry carries
+// an npm package, so verification continues into that pipeline and no
+// hosted endpoint blocks anything, regardless of what packageTypes or
+// remotes also happen to be present. Otherwise it fails with one of two
+// distinct details, so a caller is never told about a remote endpoint that
+// does not exist: when the entry carries no packages at all and at least
+// one remote (the true "remote only" shape D5 names), the detail lists
+// every entry in remotes; when the entry carries some other, non npm
+// distribution instead (another package ecosystem, or nothing at all), the
+// detail instead reports that this build carries no distribution it can
+// verify, naming whatever packageTypes were seen.
+func RegistryChecks(hasAttRef bool, hasNPM bool, packageTypes []string, remotes []string) []CheckResult {
 	attDetail := ""
 	if !hasAttRef {
 		attDetail = "this MCP Registry entry carries no attestation reference field; that field does not exist in the registry schema today, which is the gap the MCP Registry provenance RFC proposes to close"
@@ -551,17 +556,39 @@ func RegistryChecks(hasAttRef bool, remoteOnly bool, remotes []string) []CheckRe
 
 	hostedPassed := true
 	hostedDetail := ""
-	if remoteOnly {
+	remoteOnly := len(packageTypes) == 0 && len(remotes) > 0
+	switch {
+	case hasNPM:
+		// Passes; no detail needed.
+	case remoteOnly:
 		hostedPassed = false
 		hostedDetail = fmt.Sprintf(
 			"this build verifies artifact distributed (npm) servers only; this registry entry points only at remote endpoint(s): %s",
 			strings.Join(remotes, ", "))
+	default:
+		hostedPassed = false
+		hostedDetail = unsupportedDistributionDetail(packageTypes)
 	}
 
 	return []CheckResult{
 		{Code: codes.RegistryAttestationRefPresent, Passed: hasAttRef, Informational: true, Detail: attDetail},
 		{Code: codes.HostedEndpointUnsupported, Passed: hostedPassed, Informational: true, Detail: hostedDetail},
 	}
+}
+
+// unsupportedDistributionDetail explains a failing HOSTED_ENDPOINT_UNSUPPORTED
+// for a registry entry that carries no npm package and is not remote only
+// either: some other package ecosystem entirely (pypi, oci, and so on), or no
+// distribution at all. Naming packageTypes (or their absence) keeps this
+// detail distinct from the remote only case, whose own detail names
+// endpoints instead of package types.
+func unsupportedDistributionDetail(packageTypes []string) string {
+	if len(packageTypes) == 0 {
+		return "this build verifies artifact distributed (npm) servers only; this registry entry carries no packages and no remote endpoints at all"
+	}
+	return fmt.Sprintf(
+		"this build verifies artifact distributed (npm) servers only; this registry entry carries no npm package, only: %s",
+		strings.Join(packageTypes, ", "))
 }
 
 // predicateParseDetail distinguishes the two causes PREDICATE_VERSION_UNSUPPORTED

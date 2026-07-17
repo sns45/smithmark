@@ -630,22 +630,25 @@ func TestCheckOutcomesSetOnlyInVerifyPackage(t *testing.T) {
 // no change to its allowlist.
 
 // TestRegistryChecksBothInformational asserts both registry checks are always
-// marked informational, in every shape (npm backed, remote only, or an entry
-// carrying the RFC's not yet real attestation reference field): neither may
-// ever drive an exit code (D5).
+// marked informational, in every shape (npm backed, remote only, some other
+// non npm distribution, or an entry carrying the RFC's not yet real
+// attestation reference field): neither may ever drive an exit code (D5).
 func TestRegistryChecksBothInformational(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		hasAttRef  bool
-		remoteOnly bool
-		remotes    []string
+		name         string
+		hasAttRef    bool
+		hasNPM       bool
+		packageTypes []string
+		remotes      []string
 	}{
-		{"npm backed, no att ref", false, false, nil},
-		{"remote only, no att ref", false, true, []string{"https://mcp.notion.com/mcp (streamable-http)"}},
-		{"att ref present", true, false, nil},
+		{"npm backed, no att ref", false, true, []string{"npm"}, nil},
+		{"remote only, no att ref", false, false, nil, []string{"https://mcp.notion.com/mcp (streamable-http)"}},
+		{"other distribution, no att ref", false, false, []string{"pypi"}, nil},
+		{"nothing at all, no att ref", false, false, nil, nil},
+		{"att ref present", true, true, []string{"npm"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			checks := verify.RegistryChecks(tc.hasAttRef, tc.remoteOnly, tc.remotes)
+			checks := verify.RegistryChecks(tc.hasAttRef, tc.hasNPM, tc.packageTypes, tc.remotes)
 			if len(checks) != 2 {
 				t.Fatalf("RegistryChecks returned %d checks, want 2", len(checks))
 			}
@@ -663,7 +666,7 @@ func TestRegistryChecksBothInformational(t *testing.T) {
 // decodes to today, REGISTRY_ATTESTATION_REF_PRESENT fails and its detail
 // names the gap.
 func TestRegistryChecksAttestationRefAlwaysFailsToday(t *testing.T) {
-	checks := verify.RegistryChecks(false, false, nil)
+	checks := verify.RegistryChecks(false, true, []string{"npm"}, nil)
 	c := requireCheck(t, checks, codes.RegistryAttestationRefPresent)
 	if c.Passed {
 		t.Error("REGISTRY_ATTESTATION_REF_PRESENT passed with hasAttRef false; no real registry entry carries this field today")
@@ -677,33 +680,77 @@ func TestRegistryChecksAttestationRefAlwaysFailsToday(t *testing.T) {
 // logic driven by hasAttRef, not a hardcoded failure: once an entry carries
 // the RFC's field (hasAttRef true), the check passes.
 func TestRegistryChecksAttestationRefPassesWhenPresent(t *testing.T) {
-	checks := verify.RegistryChecks(true, false, nil)
+	checks := verify.RegistryChecks(true, true, []string{"npm"}, nil)
 	c := requireCheck(t, checks, codes.RegistryAttestationRefPresent)
 	if !c.Passed {
 		t.Error("REGISTRY_ATTESTATION_REF_PRESENT failed with hasAttRef true, want passed")
 	}
 }
 
-// TestRegistryChecksHostedEndpointFailsOnlyWhenRemoteOnly asserts
-// HOSTED_ENDPOINT_UNSUPPORTED fails, naming the remote endpoints, exactly when
-// remoteOnly is true (D5's actual guard), and otherwise passes: an npm backed
-// entry that also happens to declare remotes is not blocked by them.
-func TestRegistryChecksHostedEndpointFailsOnlyWhenRemoteOnly(t *testing.T) {
+// TestRegistryChecksHostedEndpointPassesWhenNPMBacked asserts
+// HOSTED_ENDPOINT_UNSUPPORTED always passes when hasNPM is true, regardless
+// of what other package types or remotes the entry also happens to declare:
+// an npm backed entry is never blocked by them.
+func TestRegistryChecksHostedEndpointPassesWhenNPMBacked(t *testing.T) {
+	remotes := []string{"https://mcp.notion.com/mcp (streamable-http)"}
+	c := requireCheck(t, verify.RegistryChecks(false, true, []string{"npm", "oci"}, remotes), codes.HostedEndpointUnsupported)
+	if !c.Passed {
+		t.Error("HOSTED_ENDPOINT_UNSUPPORTED failed for an npm backed entry, want passed (other package types and remotes present are not blocking)")
+	}
+}
+
+// TestRegistryChecksHostedEndpointRemoteOnly asserts HOSTED_ENDPOINT_UNSUPPORTED
+// fails, naming the remote endpoints, exactly when the entry carries no
+// packages at all and at least one remote: the tightened D5 rule
+// (len(packageTypes) == 0 && len(remotes) > 0), not merely the absence of an
+// npm package, which a pypi or oci only entry would also satisfy without
+// being remote only at all.
+func TestRegistryChecksHostedEndpointRemoteOnly(t *testing.T) {
 	remotes := []string{"https://mcp.notion.com/mcp (streamable-http)", "https://mcp.notion.com/sse (sse)"}
 
-	remoteOnly := requireCheck(t, verify.RegistryChecks(false, true, remotes), codes.HostedEndpointUnsupported)
-	if remoteOnly.Passed {
+	c := requireCheck(t, verify.RegistryChecks(false, false, nil, remotes), codes.HostedEndpointUnsupported)
+	if c.Passed {
 		t.Error("HOSTED_ENDPOINT_UNSUPPORTED passed for a remote only entry, want failed")
 	}
 	for _, r := range remotes {
-		if !strings.Contains(remoteOnly.Detail, r) {
-			t.Errorf("HOSTED_ENDPOINT_UNSUPPORTED detail %q does not name remote %q", remoteOnly.Detail, r)
+		if !strings.Contains(c.Detail, r) {
+			t.Errorf("HOSTED_ENDPOINT_UNSUPPORTED detail %q does not name remote %q", c.Detail, r)
 		}
 	}
+}
 
-	npmBacked := requireCheck(t, verify.RegistryChecks(false, false, remotes), codes.HostedEndpointUnsupported)
-	if !npmBacked.Passed {
-		t.Error("HOSTED_ENDPOINT_UNSUPPORTED failed for an npm backed entry, want passed (remotes present are not blocking)")
+// TestRegistryChecksHostedEndpointOtherDistribution is the fast follow this
+// task adds: an entry with no npm package and no remotes either, but some
+// other package ecosystem (pypi here), must not be mistaken for remote only.
+// The previous computation (remoteOnly as merely the absence of an npm
+// package) would have named zero remote endpoints, a misleading detail for
+// an entry that has none. It must instead fail with a distinct detail naming
+// the package types actually seen.
+func TestRegistryChecksHostedEndpointOtherDistribution(t *testing.T) {
+	c := requireCheck(t, verify.RegistryChecks(false, false, []string{"pypi"}, nil), codes.HostedEndpointUnsupported)
+	if c.Passed {
+		t.Error("HOSTED_ENDPOINT_UNSUPPORTED passed for a pypi only entry, want failed")
+	}
+	if strings.Contains(c.Detail, "points only at remote endpoint") {
+		t.Errorf("detail %q wrongly uses the remote only phrasing for a pypi only entry", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "pypi") {
+		t.Errorf("detail %q does not name the pypi package type seen", c.Detail)
+	}
+}
+
+// TestRegistryChecksHostedEndpointNothingAtAll covers an entry with neither
+// packages nor remotes at all: also not remote only (remotes is empty too),
+// so it falls into the same "no verifiable distribution" detail as the pypi
+// only case, this time reporting that nothing was seen at all rather than
+// naming a package type or a remote endpoint that does not exist.
+func TestRegistryChecksHostedEndpointNothingAtAll(t *testing.T) {
+	c := requireCheck(t, verify.RegistryChecks(false, false, nil, nil), codes.HostedEndpointUnsupported)
+	if c.Passed {
+		t.Error("HOSTED_ENDPOINT_UNSUPPORTED passed for an entry with no distribution at all, want failed")
+	}
+	if strings.Contains(c.Detail, "points only at remote endpoint") {
+		t.Errorf("detail %q wrongly uses the remote only phrasing for an entry with nothing at all", c.Detail)
 	}
 }
 

@@ -90,8 +90,12 @@ func runRegistryCheck(ctx context.Context, d *deps, serverName string, o *regist
 	for i, r := range entry.Remotes {
 		remotes[i] = fmt.Sprintf("%s (%s)", r.URL, r.Transport)
 	}
+	packageTypes := make([]string, len(entry.Packages))
+	for i, p := range entry.Packages {
+		packageTypes[i] = p.Type
+	}
 	_, hasNPM := entry.NPMPackage()
-	registryChecks := verify.RegistryChecks(entry.HasAttRef, !hasNPM, remotes)
+	registryChecks := verify.RegistryChecks(entry.HasAttRef, hasNPM, packageTypes, remotes)
 
 	report, err := buildRegistryReport(ctx, d, entry, registryChecks, o)
 	if err != nil {
@@ -118,8 +122,8 @@ func runRegistryCheck(ctx context.Context, d *deps, serverName string, o *regist
 // block, since no attestation bundle was ever fetched to build one from. With
 // an npm package, the shared discovery and verification core runs exactly as
 // verify's own runVerify does, and registryChecks is merged into the
-// resulting report's Checks, re-sorted by Code (the same determinism
-// guarantee every VerificationReport carries).
+// resulting report's Checks, which are then sorted by Code again (the same
+// determinism guarantee every VerificationReport carries).
 func buildRegistryReport(ctx context.Context, d *deps, entry *discover.RegistryEntry, registryChecks []verify.CheckResult, o *registryOptions) (*verify.VerificationReport, error) {
 	npmPkg, hasNPM := entry.NPMPackage()
 	if !hasNPM {
