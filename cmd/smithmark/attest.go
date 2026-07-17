@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -226,22 +227,19 @@ func completeSkillSurface(root string, decl *discover.Declaration) (manifest.Dig
 // command and speaking MCP to it (U2). Resources and prompts are empty but non
 // nil in v0.1: extraction covers tools only, and a nil slice would fail
 // validation as an absent key. Transports stay whatever the declaration set.
+//
+// When BOTH a --tools-from reference file AND a declared launch command are
+// present, the two are cross checked and any disagreement fails closed with
+// TOOL_LISTING_MISMATCH (decision U2 addendum): attest is the one command that
+// may execute the artifact, so it is the only place the maker's static tool
+// listing can be checked against what the server actually serves. Signing a
+// manifest whose tool listing deviates from the live server is exactly the
+// misdeclaration this project exists to catch, so it is refused rather than
+// silently preferring one source over the other.
 func completeMCPSurface(ctx context.Context, root string, decl *discover.Declaration, o *attestOptions) (manifest.DigestSet, error) {
 	m := decl.Manifest
 
-	var tools []manifest.ToolDecl
-	var err error
-	if o.toolsFrom != "" {
-		tools, err = discover.ToolsFromFile(o.toolsFrom)
-	} else {
-		if len(decl.Command) == 0 {
-			return nil, codes.E(codes.ToolExtractionFailed,
-				"attest: mcp-server declaration carries no command to launch for tool extraction; add a command to smithmark.yaml or pass --tools-from")
-		}
-		extractCtx, cancel := context.WithTimeout(ctx, toolExtractionTimeout)
-		defer cancel()
-		tools, _, err = discover.ExtractTools(extractCtx, decl.Command)
-	}
+	tools, err := resolveMCPTools(ctx, decl, o)
 	if err != nil {
 		return nil, err
 	}
@@ -267,6 +265,151 @@ func completeMCPSurface(ctx context.Context, root string, decl *discover.Declara
 			"attest: tarball package.json version %q does not match declared version %q", tarVersion, m.Artifact.Version)
 	}
 	return digest, nil
+}
+
+// resolveMCPTools produces the tool listing completeMCPSurface stamps, choosing
+// among three cases. With both a --tools-from file and a declared command, it
+// extracts live, compares the two, and fails closed on any disagreement
+// (TOOL_LISTING_MISMATCH). With only a --tools-from file, it reads the file
+// (verify's escape hatch, no execution). With only a command, it launches the
+// server and extracts live. With neither, it fails closed naming both remedies.
+func resolveMCPTools(ctx context.Context, decl *discover.Declaration, o *attestOptions) ([]manifest.ToolDecl, error) {
+	hasFile := o.toolsFrom != ""
+	hasCommand := len(decl.Command) > 0
+
+	switch {
+	case hasFile && hasCommand:
+		fileTools, err := discover.ToolsFromFile(o.toolsFrom)
+		if err != nil {
+			return nil, err
+		}
+		liveTools, err := extractLiveTools(ctx, decl.Command)
+		if err != nil {
+			return nil, err
+		}
+		if disagreement := toolListingDisagreement(fileTools, liveTools); disagreement != "" {
+			return nil, codes.E(codes.ToolListingMismatch,
+				"attest: the --tools-from listing disagrees with the live server: %s. Refusing to sign a manifest whose declared tools deviate from what the server actually lists (U2)", disagreement)
+		}
+		return fileTools, nil
+	case hasFile:
+		return discover.ToolsFromFile(o.toolsFrom)
+	case hasCommand:
+		return extractLiveTools(ctx, decl.Command)
+	default:
+		return nil, codes.E(codes.ToolExtractionFailed,
+			"attest: mcp-server declaration carries no command to launch for tool extraction; add a command to smithmark.yaml or pass --tools-from")
+	}
+}
+
+// extractLiveTools launches command under the bounded extraction timeout and
+// returns its live tool listing (U2). It is shared by the command only and the
+// cross check paths so the deadline is applied identically in both.
+func extractLiveTools(ctx context.Context, command []string) ([]manifest.ToolDecl, error) {
+	extractCtx, cancel := context.WithTimeout(ctx, toolExtractionTimeout)
+	defer cancel()
+	tools, _, err := discover.ExtractTools(extractCtx, command)
+	return tools, err
+}
+
+// toolListingDisagreement compares a static tool listing against a live one by
+// tool name and inputSchemaDigest, returning a human readable description of the
+// first disagreement it finds or "" when the two agree. The comparison is order
+// independent (a server and a hand written file need not list tools in the same
+// order) and deterministic (names are compared in sorted order), so the same
+// mismatch always yields the same message.
+//
+// A duplicate tool name on EITHER side is itself a disagreement (M4): a well
+// formed MCP tools list has unique names, so a repeated name is a malformed
+// listing worth failing on, not a detail to collapse away. Both sides are
+// checked for duplicates before the set comparison, so a duplicate can never be
+// silently reconciled last wins and signed.
+func toolListingDisagreement(fileTools, liveTools []manifest.ToolDecl) string {
+	if dup := duplicateToolName(fileTools); dup != "" {
+		return fmt.Sprintf("--tools-from lists tool %q more than once; a well formed MCP tools list has unique names", dup)
+	}
+	if dup := duplicateToolName(liveTools); dup != "" {
+		return fmt.Sprintf("the live server lists tool %q more than once; a well formed MCP tools list has unique names", dup)
+	}
+
+	fileByName := indexToolsByName(fileTools)
+	liveByName := indexToolsByName(liveTools)
+
+	for _, name := range sortedToolNames(fileByName) {
+		if _, ok := liveByName[name]; !ok {
+			return fmt.Sprintf("--tools-from declares tool %q which the live server does not list", name)
+		}
+	}
+	for _, name := range sortedToolNames(liveByName) {
+		if _, ok := fileByName[name]; !ok {
+			return fmt.Sprintf("the live server lists tool %q which --tools-from does not declare", name)
+		}
+	}
+	for _, name := range sortedToolNames(fileByName) {
+		if !digestSetsEqual(fileByName[name].InputSchemaDigest, liveByName[name].InputSchemaDigest) {
+			return fmt.Sprintf("tool %q input schema digest disagrees between --tools-from and the live server", name)
+		}
+	}
+	return ""
+}
+
+// indexToolsByName keys a tool listing by tool name. A well formed MCP server
+// never lists a name twice, and toolListingDisagreement rejects any listing that
+// does (duplicateToolName) before calling this, so by the time indexing runs
+// every name is unique and no collapsing can hide a disagreement.
+func indexToolsByName(tools []manifest.ToolDecl) map[string]manifest.ToolDecl {
+	m := make(map[string]manifest.ToolDecl, len(tools))
+	for _, t := range tools {
+		m[t.Name] = t
+	}
+	return m
+}
+
+// duplicateToolName reports the first tool name (in sorted order, so the result
+// is deterministic) that appears more than once in tools, or "" when every name
+// is unique. A duplicate makes the whole listing malformed, so
+// toolListingDisagreement treats it as a fail closed disagreement rather than
+// collapsing it.
+func duplicateToolName(tools []manifest.ToolDecl) string {
+	seen := make(map[string]bool, len(tools))
+	var dups []string
+	for _, t := range tools {
+		if seen[t.Name] {
+			dups = append(dups, t.Name)
+		}
+		seen[t.Name] = true
+	}
+	if len(dups) == 0 {
+		return ""
+	}
+	sort.Strings(dups)
+	return dups[0]
+}
+
+// sortedToolNames returns the tool names in a listing index, sorted, so every
+// comparison and error message this file produces is deterministic.
+func sortedToolNames(byName map[string]manifest.ToolDecl) []string {
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// digestSetsEqual reports whether two digest sets carry the same keys and
+// values. An inputSchemaDigest is a single sha256 entry in practice, but this
+// compares the whole set so a future multi algorithm digest is handled too.
+func digestSetsEqual(a, b manifest.DigestSet) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // pushAttestation resolves the deterministic attestation ref for ref, opens a

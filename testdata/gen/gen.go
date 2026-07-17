@@ -69,10 +69,11 @@ import (
 // Committed paths, all relative to the repository root (the working directory
 // `go run ./testdata/gen` runs in).
 const (
-	signatureDir = "testdata/signature"
-	privKeyPath  = signatureDir + "/test-signing-key.pem"
-	pubKeyPath   = signatureDir + "/test-signing-key-pub.pem"
-	skillRoot    = "testdata/skills/hello-skill"
+	signatureDir     = "testdata/signature"
+	privKeyPath      = signatureDir + "/test-signing-key.pem"
+	pubKeyPath       = signatureDir + "/test-signing-key-pub.pem"
+	skillRoot        = "testdata/skills/hello-skill"
+	misdeclaredSkill = "testdata/skills/misdeclared-skill"
 )
 
 // Fixed generator identity and clock stamped onto every generated manifest, so
@@ -128,7 +129,7 @@ func main() {
 		log.Fatalf("--check and --bootstrap are mutually exclusive: --check only reads the committed fixtures, while --bootstrap mints a new key and rewrites them")
 	}
 
-	specs := []subjectSpec{buildSkillSubject(), buildNPMSubject()}
+	specs := []subjectSpec{buildSkillSubject(), buildNPMSubject(), buildMisdeclaredSkillSubject()}
 
 	if *check {
 		runCheck(specs)
@@ -148,10 +149,18 @@ func main() {
 // subjectSpec is one attestation subject and everything the generator and the
 // checker need to build and validate its fixture set.
 type subjectSpec struct {
-	name        string                       // subdirectory under signatureDir: "skill" or "npm"
+	name        string                       // subdirectory under signatureDir: "skill", "npm", or "misdeclared-skill"
 	manifest    *manifest.CapabilityManifest // the fully valid, stamped predicate
 	trueDigest  manifest.DigestSet           // the subject digest the valid fixtures attest
 	wrongDigest manifest.DigestSet           // the wrong subject digest the digest-mismatch variant carries
+	// validOnly emits and checks only the valid variant, skipping the four
+	// tamper/mismatch/schema/predicate variants. The misdeclared-skill subject
+	// sets it: its whole point is a valid signature over an honest bundle
+	// digest whose predicate carries a dishonest (under declared) capability
+	// set, which the verify strict gate catches via the capability lint, not
+	// via any cryptographic or schema defect, so the negative crypto variants
+	// would add nothing and are not generated.
+	validOnly bool
 }
 
 // buildSkillSubject builds the hello-skill subject exactly as the attest
@@ -159,10 +168,30 @@ type subjectSpec struct {
 // surface, stamp the fixed clock and generator, and compute the real canonical
 // bundle digest.
 func buildSkillSubject() subjectSpec {
-	decl, err := discover.LoadDeclared(filepath.Join(skillRoot, "smithmark.yaml"))
-	must("loading hello-skill declaration", err)
-	files, surface, info, err := discover.WalkSkill(skillRoot, decl.Executables)
-	must("walking hello-skill", err)
+	return buildSkillSubjectFrom("skill", skillRoot, false)
+}
+
+// buildMisdeclaredSkillSubject builds the misdeclared-skill subject: the same
+// honest skill pipeline as buildSkillSubject, over a directory whose
+// smithmark.yaml declares zero networkEgress while scripts/exfil.ts calls
+// fetch. The signature and bundle digest are entirely honest; only the declared
+// capability set is not, which is why the capability lint (not the crypto or
+// schema checks) is what the verify strict gate catches over it. Only the valid
+// variant is emitted (validOnly).
+func buildMisdeclaredSkillSubject() subjectSpec {
+	return buildSkillSubjectFrom("misdeclared-skill", misdeclaredSkill, true)
+}
+
+// buildSkillSubjectFrom builds one skill subject from the directory at root,
+// writing its fixtures under signatureDir/name. validOnly restricts generation
+// and checking to the valid variant. It is shared by the honest hello-skill
+// subject and the misdeclared-skill subject, which differ only in their source
+// directory and whether the negative crypto variants are emitted.
+func buildSkillSubjectFrom(name, root string, validOnly bool) subjectSpec {
+	decl, err := discover.LoadDeclared(filepath.Join(root, "smithmark.yaml"))
+	must("loading "+name+" declaration", err)
+	files, surface, info, err := discover.WalkSkill(root, decl.Executables)
+	must("walking "+name, err)
 
 	m := decl.Manifest
 	m.Skill.EntryDigest = surface.EntryDigest
@@ -173,19 +202,20 @@ func buildSkillSubject() subjectSpec {
 	m.GeneratedAt = fixedGeneratedAt
 	m.Generator = manifest.GeneratorInfo{Name: generatorName, Version: generatorVersion}
 	if issues := m.Validate(); len(issues) > 0 {
-		log.Fatalf("hello-skill manifest did not validate: %v", issues)
+		log.Fatalf("%s manifest did not validate: %v", name, issues)
 	}
 
 	dg, err := bundle.Digest(files)
-	must("digesting hello-skill bundle", err)
+	must("digesting "+name+" bundle", err)
 	trueDigest, err := manifest.SubjectDigestFromBundle(dg)
-	must("converting hello-skill bundle digest", err)
+	must("converting "+name+" bundle digest", err)
 
 	return subjectSpec{
-		name:        "skill",
+		name:        name,
 		manifest:    m,
 		trueDigest:  trueDigest,
 		wrongDigest: manifest.DigestSet{"smithmark-bundle-v1": skillWrongHex},
+		validOnly:   validOnly,
 	}
 }
 
@@ -243,6 +273,13 @@ func generate(ctx context.Context, signer compose.Signer, spec subjectSpec) {
 	must(spec.name+": assembling valid statement", err)
 	validBundle := signOrDie(ctx, signer, validStmt)
 	writeFixture(spec.name, variantValid, validBundle)
+
+	// A validOnly subject (the misdeclared-skill fixture) emits nothing beyond
+	// the valid variant: its point is an honest signature over an under declared
+	// predicate, which the negative crypto variants would not illustrate.
+	if spec.validOnly {
+		return
+	}
 
 	// tampered: the valid bundle with one byte of the DSSE signature flipped, so
 	// the payload is byte identical to valid but the signature no longer
@@ -461,6 +498,12 @@ func checkSubject(spec subjectSpec, pub *ecdsa.PublicKey) error {
 	}
 	if !digestSetEqual(stmt.Subject[0].Digest, spec.trueDigest) {
 		return fmt.Errorf("%s/valid: subject digest %v is not the true digest %v", spec.name, stmt.Subject[0].Digest, spec.trueDigest)
+	}
+
+	// A validOnly subject carries only the valid variant, so the four negative
+	// variant checks below do not apply.
+	if spec.validOnly {
+		return nil
 	}
 
 	// tampered: same payload, signature no longer verifies.

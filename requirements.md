@@ -179,7 +179,7 @@ Determinism across OSes (path separators, file modes on Windows) is a required t
 
 - **`smithmark attest <path|ref>`** — generate capability manifest (from declared config + extracted MCP tool listing), invoke forgeseal for the dependency SBOM, wrap in DSSE, sign via Sigstore (keyless in CI via OIDC; key-based supported), attach/publish per §6.
 - **`smithmark verify <ref>`** — resolve artifact, discover attestations (§6), verify signatures + Rekor inclusion + subject digest, validate manifest schema, run lint, emit `VerificationReport` (JSON + human summary). Exit non-zero on verification *failure*; lint findings alone do not fail (policy is assayward's job) unless `--strict`.
-- **`smithmark lint <path>`** — capability lint only, no signatures: JS/TS and Python import/require scanning for network, filesystem, exec, and env access; MCP tool-listing extraction; report declared-vs-detected gaps. Heuristic, advisory, documented false-negative posture.
+- **`smithmark lint <path>`** — capability lint only, no signatures: JS/TS and Python import/require scanning for network, filesystem, exec, and env access; report declared-vs-detected gaps. Heuristic, advisory, documented false-negative posture. Static only: lint never executes the artifact (carried U2 posture), so the declared-vs-extracted MCP tool-listing comparison lives at attest time, where the maker runs their own code (see the `TOOL_LISTING_MISMATCH` cross-check in `smithmark attest`), not here.
 - **`smithmark registry check <server-name>`** — evaluate an MCP Registry entry's attestation state (the demo surface for the registry RFC).
 - **`smithmark manifest init`** — interactive/flag-driven scaffold of a declared manifest for maintainers adopting smithmark.
 

@@ -30,8 +30,9 @@ const summaryDetailWidth = 80
 
 // undeclaredFindingPrefix is the lint finding code family the --strict gate
 // reacts to (spec 3). A passing verification that carries a finding whose code
-// begins with it exits 2 rather than 0. Findings are empty until Phase 4 (M4)
-// populates them, so the gate never fires today; the placeholder test pins that.
+// begins with it exits 2 rather than 0. M4 populates Findings from the
+// capability lint over a local source tree (attachLintFindings), so the gate
+// now fires live over a misdeclared local artifact.
 const undeclaredFindingPrefix = "UNDECLARED_"
 
 // verifyOptions holds the parsed verify flag surface (spec 5, decision D4).
@@ -120,7 +121,18 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 
 	// Surface discovery notes on stderr (summary mode only) so a human sees which
 	// resolution path ran and why, while stdout stays a clean, parseable report.
-	writeDiscoveryNotes(d.Stderr, disc.Notes, o.output)
+	writeStderrNotes(d.Stderr, o.output == outputJSON, disc.Notes)
+
+	// Capability lint over the local source tree (decision D4 addendum). Only a
+	// local directory argument carries source to scan; a remote or bundle only
+	// verification leaves Findings empty and notes that lint was skipped. The
+	// findings never change any verify check outcome; they only feed the
+	// --strict exit 2 gate below.
+	lintNotes, err := attachLintFindings(arg, report)
+	if err != nil {
+		return err
+	}
+	writeStderrNotes(d.Stderr, o.output == outputJSON, lintNotes)
 
 	code := verifyExitCode(report, o.strict)
 	if err := writeReport(d.Stdout, report, o.output, code); err != nil {
@@ -146,13 +158,16 @@ func validateOutputFormat(output string) error {
 	}
 }
 
-// writeDiscoveryNotes prints each discovery note to w (stderr) as a "note:"
-// line, but only outside json mode. Keeping notes on stderr leaves stdout a
-// clean, parseable report and the json golden untouched; json mode prints
-// nothing here, because surfacing notes as a report schema field is a
-// deliberate M4 decision, not something to smuggle into the json surface.
-func writeDiscoveryNotes(w io.Writer, notes []string, output string) {
-	if output == outputJSON {
+// writeStderrNotes prints each advisory or discovery note to w (stderr) as a
+// "note:" line, but only when jsonMode is false. Keeping notes on stderr leaves
+// stdout a clean, parseable report and the json golden untouched; json mode
+// prints nothing here, because surfacing notes as a report schema field is a
+// deliberate M4 decision, not something to smuggle into the json surface. It is
+// the one helper both verify (discovery notes, lint skipped notes) and lint
+// (advisory notes) share, so the two never format the stderr note surface two
+// different ways.
+func writeStderrNotes(w io.Writer, jsonMode bool, notes []string) {
+	if jsonMode {
 		return
 	}
 	for _, n := range notes {
@@ -239,6 +254,31 @@ func verifyDiscovered(d *deps, disc *discover.Discovered, trustRootPath string) 
 	return report, nil
 }
 
+// attachLintFindings runs the capability lint over arg's local source tree and
+// stores the result in report.Findings, returning any advisory notes for the
+// stderr surface (decision D4 addendum). Lint attaches to verify only for a
+// local source tree, because verify never executes an artifact (U2) and a
+// remote or bundle only argument carries no source to scan: in that case
+// report.Findings is left as verify.Run set it (an empty, non nil slice) and a
+// single "lint skipped: no local sources" note is returned instead. A local
+// directory always reached here through discovery, which already loaded its
+// declaration, so the only error attachLintFindings can surface is an
+// operational one from a root walk failure, propagated so runMain maps it to
+// exit 3; a single unreadable file inside the tree is advisory (M5), skipped
+// with a note and never swallowing the completed verification report.
+func attachLintFindings(arg string, report *verify.VerificationReport) ([]string, error) {
+	info, statErr := os.Stat(arg)
+	if statErr != nil || !info.IsDir() {
+		return []string{"lint skipped: no local sources"}, nil
+	}
+	findings, notes, err := lintTree(arg)
+	if err != nil {
+		return nil, err
+	}
+	report.Findings = findings
+	return notes, nil
+}
+
 // verifyExitCode classifies a completed report into its process exit code
 // (decision D4). It is the single extension of the exit contract for verify: 1
 // when any failing class check failed (delegated to the exported authority so
@@ -256,8 +296,8 @@ func verifyExitCode(report *verify.VerificationReport, strict bool) int {
 }
 
 // hasUndeclaredFinding reports whether the report carries any lint finding in
-// the UNDECLARED_ family. Findings are empty until Phase 4, so this is false
-// today for every input.
+// the UNDECLARED_ family, the family the strict gate flags. Findings are
+// populated by attachLintFindings for a local source tree and empty otherwise.
 func hasUndeclaredFinding(report *verify.VerificationReport) bool {
 	for _, f := range report.Findings {
 		if strings.HasPrefix(f.Code, undeclaredFindingPrefix) {

@@ -37,6 +37,13 @@ const (
 	verifyFixtureNPMName    = "@modelcontextprotocol/server-filesystem"
 	verifyFixtureNPMVersion = "2026.7.10"
 	verifyTestAttestBase    = "registry.example.com/attest"
+
+	// The misdeclared skill fixture (signed over its true bundle digest, with a
+	// smithmark.yaml declaring zero egress beside a scripts/exfil.ts that calls
+	// fetch) and its committed valid bundle, for the strict lint gate end to end
+	// tests.
+	misdeclaredSkillPath       = "../../testdata/skills/misdeclared-skill"
+	misdeclaredSkillBundlePath = "../../testdata/signature/misdeclared-skill/valid.sigstore.json"
 )
 
 // verifyFixtureTransport is a canned http.RoundTripper serving responses keyed
@@ -279,6 +286,12 @@ func TestVerifyMissingAttestationSummarySurfacesNote(t *testing.T) {
 	if !strings.Contains(stderr.String(), "no attestation tag") {
 		t.Errorf("stderr does not carry the probed attestation tag note:\n%s", stderr.String())
 	}
+	// A remote npm argument carries no local source tree, so verify emits the
+	// exact lint skipped note (M13 pins the wording, since the D4 addendum
+	// promises it and a summary only test is the only place it is observable).
+	if !strings.Contains(stderr.String(), "lint skipped: no local sources") {
+		t.Errorf("stderr does not carry the lint skipped note for a remote artifact:\n%s", stderr.String())
+	}
 }
 
 // TestVerifyInvalidOutputExitsThree proves an unrecognized --output value fails
@@ -393,9 +406,11 @@ func TestVerifyBundleWithoutTrustRootRejected(t *testing.T) {
 	}
 }
 
-// TestVerifyStrictZeroFindingsExitsZero pins the reserved exit 2 placeholder: in
-// --strict mode a valid artifact with zero lint findings (findings land in M4)
-// still exits 0, proving the strict gate keys off findings, not off passing.
+// TestVerifyStrictZeroFindingsExitsZero pins the other half of the D4 strict
+// gate: in --strict mode a valid local artifact whose source tree yields zero
+// lint findings (the hello-skill fixture's only script is greet.sh, a .sh the
+// lint does not scan) still exits 0, proving the gate keys off findings, not off
+// passing.
 func TestVerifyStrictZeroFindingsExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	d := verifyDeps(t, &stdout, &stderr)
@@ -410,6 +425,65 @@ func TestVerifyStrictZeroFindingsExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
 	}
+}
+
+// TestVerifyMisdeclaredSkillNoStrictExitsZero proves the lint findings are
+// informational to the exit code without --strict: the misdeclared skill's
+// signature verifies over its true digest, the capability lint reports an
+// undeclared egress in the report's Findings, yet a plain verify still exits 0.
+func TestVerifyMisdeclaredSkillNoStrictExitsZero(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+
+	code := runMain(d, []string{
+		"verify", misdeclaredSkillPath,
+		"--bundle", misdeclaredSkillBundlePath,
+		"--trust-root", trustRootPath,
+		"--output", "json",
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if !findCheck(t, report, codes.SignatureValid).Passed {
+		t.Error("SIGNATURE_VALID should pass; the misdeclared skill is validly signed")
+	}
+	if !hasFinding(report, codes.UndeclaredNetworkEgress) {
+		t.Errorf("report carries no %s finding; findings: %+v", codes.UndeclaredNetworkEgress, report.Findings)
+	}
+}
+
+// TestVerifyStrictMisdeclaredSkillExitsTwo proves the D4 strict lint gate fires
+// live: the same passing verification, run with --strict, exits 2 because the
+// report carries an UNDECLARED_ finding. This is the completed D4 exit contract.
+func TestVerifyStrictMisdeclaredSkillExitsTwo(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+
+	code := runMain(d, []string{
+		"verify", misdeclaredSkillPath,
+		"--bundle", misdeclaredSkillBundlePath,
+		"--trust-root", trustRootPath,
+		"--strict",
+		"--output", "json",
+	})
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", code, stderr.String())
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if !hasFinding(report, codes.UndeclaredNetworkEgress) {
+		t.Errorf("report carries no %s finding; findings: %+v", codes.UndeclaredNetworkEgress, report.Findings)
+	}
+}
+
+// hasFinding reports whether the report carries a finding with the given code.
+func hasFinding(report *verify.VerificationReport, code string) bool {
+	for _, f := range report.Findings {
+		if f.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // TestTruncateDetailRuneSafety proves truncateDetail counts runes, not bytes: a

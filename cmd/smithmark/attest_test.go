@@ -495,6 +495,91 @@ func TestAttestMCPTarballMissingPackageJSON(t *testing.T) {
 	}
 }
 
+// fakemcpDeclWithCommand is a fake-mcp declaration that carries BOTH a launch
+// command (the committed fakemcp fixture, reached by a path relative to this
+// package's working directory) and is used alongside --tools-from, so attest
+// cross checks the static listing against the live server (U2 addendum). The
+// name and version match the tarball the agreeing case digests.
+const fakemcpDeclWithCommand = `kind: mcp-server
+name: fakemcp
+version: 0.1.0
+source: npm
+mcp:
+  transports: [stdio]
+  command: [go, run, ../../testdata/fakemcp]
+capabilities:
+  networkEgress: []
+  filesystem: []
+  exec: []
+  env: []
+  secrets: []
+`
+
+// agreeingToolsFile matches the fakemcp fixture's two tools and their exact
+// input schemas, so a live extraction and this file digest identically (U2).
+const agreeingToolsFile = `{
+  "tools": [
+    {"name": "hello_world", "description": "Say hello to someone by name.", "inputSchema": {"type":"object","properties":{"name":{"type":"string"},"loud":{"type":"boolean"}},"required":["name"]}},
+    {"name": "add_numbers", "description": "Add two numbers together.", "inputSchema": {"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}}
+  ]
+}`
+
+// TestAttestToolListingMismatch proves the U2 addendum: with both --tools-from
+// and a declared command, a static listing that disagrees with the live server
+// fails closed with TOOL_LISTING_MISMATCH rather than signing the mismatch. The
+// live fakemcp fixture lists hello_world and add_numbers; the file below names a
+// different tool, so extraction and the file disagree.
+func TestAttestToolListingMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, fakemcpDeclWithCommand)
+	writeTestFile(t, dir, "tools.json", `{"tools":[{"name":"totally_different_tool","inputSchema":{"type":"object"}}]}`)
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.ToolListingMismatch {
+		t.Errorf("code = %q, want %q", line.Code, codes.ToolListingMismatch)
+	}
+	if !strings.Contains(line.Detail, "totally_different_tool") {
+		t.Errorf("detail %q should name the disagreeing tool", line.Detail)
+	}
+}
+
+// TestAttestToolListingAgrees proves the happy path of the same cross check:
+// when --tools-from matches the live server exactly, attest proceeds and signs
+// (here a dry run), so the cross check adds a guard without blocking an honest
+// maker.
+func TestAttestToolListingAgrees(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, fakemcpDeclWithCommand)
+	writeTestFile(t, dir, "tools.json", agreeingToolsFile)
+	writeNPMTarball(t, dir, "fakemcp-0.1.0.tgz", "fakemcp", "0.1.0")
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	stmt, err := manifest.ParseStatement(stdout.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStatement: %v", err)
+	}
+	names := map[string]bool{}
+	for _, tool := range stmt.Predicate.MCP.Tools {
+		names[tool.Name] = true
+	}
+	if !names["hello_world"] || !names["add_numbers"] {
+		t.Errorf("signed tools = %+v, want hello_world and add_numbers", stmt.Predicate.MCP.Tools)
+	}
+}
+
 // writeTestFile writes name under dir with content, failing the test on error.
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -531,6 +616,127 @@ func writeNPMTarball(t *testing.T, dir, filename, pkgName, pkgVersion string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, filename), buf.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// duplicateToolsFile is agreeingToolsFile with hello_world listed a second
+// time: its two distinct tools match the live fakemcp server exactly, yet the
+// repeated name makes it a malformed listing. Before the M4 fix the duplicate
+// collapsed (last wins) and attest signed the listing; after it, the duplicate
+// is itself a TOOL_LISTING_MISMATCH.
+const duplicateToolsFile = `{
+  "tools": [
+    {"name": "hello_world", "description": "Say hello to someone by name.", "inputSchema": {"type":"object","properties":{"name":{"type":"string"},"loud":{"type":"boolean"}},"required":["name"]}},
+    {"name": "add_numbers", "description": "Add two numbers together.", "inputSchema": {"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}},
+    {"name": "hello_world", "description": "Say hello to someone by name.", "inputSchema": {"type":"object","properties":{"name":{"type":"string"},"loud":{"type":"boolean"}},"required":["name"]}}
+  ]
+}`
+
+// TestToolListingDisagreementDuplicateFailsClosed proves the M4 fix directly on
+// the comparison: a duplicate tool name on EITHER side is itself a disagreement
+// naming the duplicate, rather than collapsing last wins. A well formed MCP
+// tools list has unique names, so a duplicate is a disagreement worth failing
+// on, not a detail to paper over.
+func TestToolListingDisagreementDuplicateFailsClosed(t *testing.T) {
+	sha := manifest.DigestSet{"sha256": "1111111111111111111111111111111111111111111111111111111111111111"}
+	unique := []manifest.ToolDecl{{Name: "dup", InputSchemaDigest: sha}}
+	duplicated := []manifest.ToolDecl{
+		{Name: "dup", InputSchemaDigest: sha},
+		{Name: "dup", InputSchemaDigest: sha},
+	}
+
+	if got := toolListingDisagreement(duplicated, unique); got == "" || !strings.Contains(got, "dup") {
+		t.Errorf("duplicate on the --tools-from side must disagree naming the tool; got %q", got)
+	}
+	if got := toolListingDisagreement(unique, duplicated); got == "" || !strings.Contains(got, "dup") {
+		t.Errorf("duplicate on the live side must disagree naming the tool; got %q", got)
+	}
+}
+
+// TestAttestToolListingDuplicateFailsClosed proves the same fix end to end: a
+// --tools-from file whose two distinct tools match the live server exactly, but
+// which repeats one name, is refused with TOOL_LISTING_MISMATCH naming the
+// duplicate rather than signed. Before M4 the duplicate collapsed and attest
+// signed the listing.
+func TestAttestToolListingDuplicateFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, declFileName, fakemcpDeclWithCommand)
+	writeTestFile(t, dir, "tools.json", duplicateToolsFile)
+	writeNPMTarball(t, dir, "fakemcp-0.1.0.tgz", "fakemcp", "0.1.0")
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--dry-run", "--tools-from", filepath.Join(dir, "tools.json"), dir})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.ToolListingMismatch {
+		t.Errorf("code = %q, want %q", line.Code, codes.ToolListingMismatch)
+	}
+	if !strings.Contains(line.Detail, "hello_world") {
+		t.Errorf("detail %q should name the duplicated tool", line.Detail)
+	}
+}
+
+// TestToolListingDisagreementBranches is a pure unit table over
+// toolListingDisagreement, exercising the live extra tool branch and the schema
+// digest disagreement branch (M13) directly, with no fakemcp exec: the digest
+// branch is the U2 cross check's core value, so it is worth pinning on its own.
+// Identical listings in different orders agree, proving the comparison is order
+// independent.
+func TestToolListingDisagreementBranches(t *testing.T) {
+	digX := manifest.DigestSet{"sha256": strings.Repeat("a", 64)}
+	digY := manifest.DigestSet{"sha256": strings.Repeat("b", 64)}
+	toolA := manifest.ToolDecl{Name: "alpha", InputSchemaDigest: digX}
+	toolB := manifest.ToolDecl{Name: "bravo", InputSchemaDigest: digX}
+
+	cases := []struct {
+		name      string
+		file      []manifest.ToolDecl
+		live      []manifest.ToolDecl
+		wantEmpty bool
+		wantSub   string
+	}{
+		{
+			name:    "live lists an extra tool",
+			file:    []manifest.ToolDecl{toolA},
+			live:    []manifest.ToolDecl{toolA, toolB},
+			wantSub: "bravo",
+		},
+		{
+			name:    "file declares an extra tool",
+			file:    []manifest.ToolDecl{toolA, toolB},
+			live:    []manifest.ToolDecl{toolA},
+			wantSub: "bravo",
+		},
+		{
+			name:    "schema digest disagrees for a shared name",
+			file:    []manifest.ToolDecl{toolA},
+			live:    []manifest.ToolDecl{{Name: "alpha", InputSchemaDigest: digY}},
+			wantSub: "input schema digest",
+		},
+		{
+			name:      "identical listings agree regardless of order",
+			file:      []manifest.ToolDecl{toolA, toolB},
+			live:      []manifest.ToolDecl{toolB, toolA},
+			wantEmpty: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toolListingDisagreement(tc.file, tc.live)
+			if tc.wantEmpty {
+				if got != "" {
+					t.Errorf("want agreement, got disagreement %q", got)
+				}
+				return
+			}
+			if got == "" || !strings.Contains(got, tc.wantSub) {
+				t.Errorf("disagreement = %q, want one containing %q", got, tc.wantSub)
+			}
+		})
 	}
 }
 

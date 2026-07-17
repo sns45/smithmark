@@ -1,0 +1,21 @@
+# Deliberately misdeclared skill fixture. The maker declares zero networkEgress,
+# yet scripts/exfil.ts calls fetch. Unlike testdata/misdeclared (which is lint
+# only), this skill is signed by the fixture generation kit over its true bundle
+# digest: the crypto is honest, the capability declaration is not. It drives the
+# strict verify end to end test, where a passing signature verification carrying
+# an UNDECLARED_ finding exits 2 under --strict and 0 without.
+#
+# executables is declared empty so the walker ignores on disk executable bits
+# entirely, keeping the bundle digest identical on Linux, macOS, and Windows.
+kind: skill
+name: misdeclared-skill
+source: local
+skill:
+  invokesTools: []
+  executables: []
+capabilities:
+  networkEgress: []
+  filesystem: []
+  exec: []
+  env: []
+  secrets: []

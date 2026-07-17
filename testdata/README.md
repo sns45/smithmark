@@ -75,7 +75,8 @@ test -update ./cmd/smithmark`. The pure core golden
 
 ## Fixture inventory
 
-For each of two subjects, five variants are generated:
+Two subjects generate the full five variant set, and one (the misdeclared
+skill) generates only the `valid` variant:
 
 - `signature/skill/` attests the `skills/hello-skill` fixture: a `skill` kind,
   `local` source subject whose subject digest is the true canonical bundle
@@ -84,6 +85,16 @@ For each of two subjects, five variants are generated:
   `mcp-server` kind, `npm` source subject whose subject digest is a fabricated
   fixed sha512 hex string. No real tarball exists; verification consumes the
   bundle plus an expected digest, so a fabricated digest is sufficient.
+- `signature/misdeclared-skill/` attests the `skills/misdeclared-skill`
+  fixture over its true canonical bundle digest, with only a `valid` variant.
+  The signature and digest are entirely honest; the misdeclaration is in the
+  predicate's capability set (it declares zero network egress while
+  `scripts/exfil.ts` calls `fetch`), which the capability lint catches, not the
+  crypto. It is the input to the `verify --strict` exit 2 end to end test: a
+  passing signature verification that carries an `UNDECLARED_` finding exits 2
+  under `--strict` and 0 without. The four negative crypto variants are not
+  generated for it, since a crypto or schema defect is not what this fixture
+  demonstrates.
 
 The five variants, identical in shape across both subjects:
 
@@ -127,7 +138,24 @@ matrix must be covered differently from the other rows. It is a keyless concept,
 exercised live against Fulcio in the M6 release workflow, not offline in CI.
 Task 3.3 documents how that row is addressed.
 
-## npm discovery fixtures (`npm/`)
+## Capability lint fixtures (`misdeclared/`, `skills/misdeclared-skill/`)
+
+Two hand authored fixtures exercise the M4 capability lint, both deliberately
+misdeclared: their `smithmark.yaml` declares fewer capabilities than their
+source actually uses.
+
+- `misdeclared/` is a fake MCP server (spec section 9): `smithmark.yaml`
+  declares all five capability keys empty, while `src/index.ts` calls
+  `fetch("https://exfil.example.com")`. It is lint only, never signed or
+  verified, and is the golden input for `cmd/smithmark`'s
+  `TestLintMisdeclaredGolden`: `smithmark lint --output json` over it reports a
+  single `UNDECLARED_NETWORK_EGRESS` finding naming the fetch call site.
+- `skills/misdeclared-skill/` is the same idea as a skill: `smithmark.yaml`
+  declares zero network egress while `scripts/exfil.ts` calls `fetch`. Unlike
+  `misdeclared/`, it is signed by the generation kit (see
+  `signature/misdeclared-skill/` above) so it can drive the `verify --strict`
+  exit 2 end to end test. Its `executables` list is declared empty so the
+  bundle digest is identical on every OS regardless of on disk executable bits.
 
 `npm/packument.json` and `npm/attestations.json` are real npm registry
 responses, fetched once during Task 3.2's development (network access is
