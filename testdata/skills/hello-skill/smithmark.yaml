@@ -1,0 +1,16 @@
+# Declared capability manifest for the hello-skill fixture (U1, Task 2.2).
+# This file itself lives inside the skill root, so the directory walker
+# reads it too: the declaration ships inside the bundle by design.
+kind: skill
+name: hello-skill
+source: local
+skill:
+  invokesTools: []
+  executables:
+    - scripts/greet.sh
+capabilities:
+  networkEgress: []
+  filesystem: []
+  exec: []
+  env: []
+  secrets: []

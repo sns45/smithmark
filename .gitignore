@@ -2,3 +2,5 @@ dist/
 bin/
 *.out
 .superpowers/
+# The compiled CLI, if a bare `go build` drops it at the repo root.
+/smithmark

@@ -6,6 +6,8 @@ package manifest
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -186,6 +188,28 @@ func (m *CapabilityManifest) Canonical() ([]byte, error) {
 	return canonicalJSON(m)
 }
 
+// SchemaDigest computes the sha256 digest of the RFC 8785 canonical encoding
+// of an MCP tool's inputSchema (decision U2). It delegates to canonicalJSON,
+// the same helper Canonical and Statement.Canonical use, so canonicalization
+// never lives in two places: a change here and a change to manifest encoding
+// can never silently diverge. schema must be non empty.
+//
+// SchemaDigest is pure and does no I/O, unlike pkg/discover.ExtractTools,
+// which executes an MCP server to obtain the schema in the first place;
+// smithmark verify and smithmark lint may call SchemaDigest freely, but must
+// never call ExtractTools (U2).
+func SchemaDigest(schema json.RawMessage) (DigestSet, error) {
+	if len(schema) == 0 {
+		return nil, errors.New("SchemaDigest: schema must not be empty")
+	}
+	canon, err := canonicalJSON(schema)
+	if err != nil {
+		return nil, fmt.Errorf("SchemaDigest: %w", err)
+	}
+	sum := sha256.Sum256(canon)
+	return DigestSet{"sha256": hex.EncodeToString(sum[:])}, nil
+}
+
 // Issue is one semantic validation failure, identified by a stable machine
 // readable code (spec 3; codes are documented in pkg/core/codes).
 type Issue struct {
@@ -194,7 +218,11 @@ type Issue struct {
 	Detail string `json:"detail"`
 }
 
-const schemaVersion1 = "1.0.0"
+// SchemaVersion is the single predicate schemaVersion this build understands
+// and stamps. Validate checks against it and the pkg/discover loader stamps
+// it onto every declared manifest, so both reference this one exported
+// constant rather than repeating the literal.
+const SchemaVersion = "1.0.0"
 
 // Validate checks a parsed manifest against the semantic rules of spec 3 and
 // decision D1, beyond what strict JSON parsing already enforces. The result
@@ -206,9 +234,9 @@ func (m *CapabilityManifest) Validate() []Issue {
 		issues = append(issues, Issue{Code: code, Path: path, Detail: detail})
 	}
 
-	if m.SchemaVersion != schemaVersion1 {
+	if m.SchemaVersion != SchemaVersion {
 		add(codes.ManifestSchemaVersionUnsupported, "schemaVersion",
-			fmt.Sprintf("schemaVersion must be %q, got %q", schemaVersion1, m.SchemaVersion))
+			fmt.Sprintf("schemaVersion must be %q, got %q", SchemaVersion, m.SchemaVersion))
 	}
 
 	switch m.Artifact.Kind {

@@ -1,0 +1,27 @@
+# Declared capability manifest for the fake-caller MCP server (U1). This is
+# the loader's happy path fixture: a maker declares identity, transports, and
+# capabilities here. Tools, resources, and prompts are extracted by attest,
+# never declared, so those keys do not appear in this file.
+kind: mcp-server
+name: fake-caller
+version: 1.0.0
+source: npm
+mcp:
+  transports:
+    - stdio
+capabilities:
+  networkEgress:
+    - host: api.example.com
+      ports: [443]
+      reason: Calls the example telephony API
+  filesystem:
+    - path: ${home}/.fake-caller/**
+      access: readwrite
+      reason: Stores call recordings and session cache
+  exec:
+    - binary: ffmpeg
+      reason: Transcodes recorded audio
+  env:
+    - API_TOKEN
+  secrets:
+    - api-key:example

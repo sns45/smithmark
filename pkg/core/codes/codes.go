@@ -93,7 +93,9 @@ const (
 	GeneratedAtInvalid = "GENERATED_AT_INVALID"
 	// ManifestFieldRequired reports a required identity string that is empty,
 	// such as artifact.name, a generator field, an mcp tool name, or a
-	// dependency SBOM field when the dependencies block is present.
+	// dependency SBOM field when the dependencies block is present. It is also
+	// raised by the skill walker when a bundle is missing its required
+	// SKILL.md entry file.
 	ManifestFieldRequired = "MANIFEST_FIELD_REQUIRED"
 	// SkillScriptPathInvalid reports a skill script path that is not a clean
 	// relative path with forward slashes, or a duplicate script path.
@@ -185,15 +187,22 @@ const (
 )
 
 // Operational codes (spec 2.2, decisions D2 and D3). SigningUnavailablePlatform
-// above predates this registry; the codes in this block are reserved for
-// Phase 2 (M2) and Phase 3 (M3) work that has not landed yet.
+// above predates this registry; the codes in this block belong to Phase 2
+// (M2) and Phase 3 (M3) work, landing incrementally as each task ships.
 const (
 	// SBOMForgesealMissing reports that the forgeseal binary required to
 	// generate a dependency SBOM could not be found.
 	SBOMForgesealMissing = "SBOM_FORGESEAL_MISSING"
 	// SBOMForgesealVersionUnsupported reports that the installed forgeseal
-	// binary is older than the minimum version this build requires.
+	// binary is older than the minimum version this build requires, or that
+	// its reported version string could not be parsed as semver at all;
+	// "dev" (a maintainer's own local build) is always accepted.
 	SBOMForgesealVersionUnsupported = "SBOM_FORGESEAL_VERSION_UNSUPPORTED"
+	// SBOMForgesealOutputInvalid reports that the forgeseal sbom output was
+	// not a valid CycloneDX document: it failed strict parsing, or it
+	// decoded but lacked the CycloneDX bomFormat marker or a specVersion.
+	// A semantically empty document must never reach a signed manifest.
+	SBOMForgesealOutputInvalid = "SBOM_FORGESEAL_OUTPUT_INVALID"
 	// RefUnmappable reports that an artifact name could not be mapped to a
 	// valid OCI repository path segment.
 	RefUnmappable = "REF_UNMAPPABLE"
@@ -201,6 +210,43 @@ const (
 	// could be resolved from the flag, environment variable, or package.json
 	// key.
 	AttestationBaseUnknown = "ATTESTATION_BASE_UNKNOWN"
+	// ToolExtractionFailed reports that extracting the MCP tool listing from
+	// a running stdio server failed: the declaration carried no launch command
+	// to run, the process could not be started or exited unexpectedly, the
+	// protocol handshake did not match, or the context deadline was exceeded
+	// before tools/list returned.
+	ToolExtractionFailed = "TOOL_EXTRACTION_FAILED"
+	// SigningConfigInvalid reports that a signing request carried no usable
+	// signing configuration: neither a key path for key based signing nor the
+	// full set of keyless inputs (Fulcio, Rekor, an OIDC issuer, and an
+	// identity token). It is distinct from SigningUnavailablePlatform, which
+	// means the platform itself cannot sign; this code means the platform can
+	// sign but the caller told it nothing to sign with.
+	SigningConfigInvalid = "SIGNING_CONFIG_INVALID"
+	// PublishBundleInvalid reports that PushAttestation or AttachReferrer was
+	// given a nil signed bundle, one carrying no bundle bytes, or one carrying
+	// an empty MediaType, to push.
+	PublishBundleInvalid = "PUBLISH_BUNDLE_INVALID"
+	// PublishTagInvalid reports that a tag handed to PushAttestation does not
+	// match the OCI distribution spec tag grammar. pkg/discover.AttestationRef
+	// is the normative producer of push tags and already builds them in a
+	// provably safe shape (Task 2.6); this code fires only when a caller
+	// supplies some other tag by hand, and it is checked before any push is
+	// attempted.
+	PublishTagInvalid = "PUBLISH_TAG_INVALID"
+	// AttestSubjectUnresolved reports that attest could not resolve exactly one
+	// subject artifact to attest. For an mcp-server it means no --tarball was
+	// supplied and the artifact root held zero, or more than one, *.tgz tarball
+	// to digest, so the subject is ambiguous; or the chosen tarball is not a
+	// gzip stream, cannot be read as a tar, or carries no package/package.json,
+	// so it is not an npm package tarball at all. attest fails closed rather
+	// than guessing which one to attest.
+	AttestSubjectUnresolved = "ATTEST_SUBJECT_UNRESOLVED"
+	// InternalError reports that an error carrying no registry code reached the
+	// command boundary. The CLI maps every failure to a single machine readable
+	// stderr line (decision D4); an error the pure core did not tag with a code
+	// is surfaced under this operational code rather than an empty one.
+	InternalError = "INTERNAL_ERROR"
 )
 
 // All returns every registered code.
@@ -251,7 +297,14 @@ func All() []string {
 		ToolListingMismatch,
 		SBOMForgesealMissing,
 		SBOMForgesealVersionUnsupported,
+		SBOMForgesealOutputInvalid,
 		RefUnmappable,
 		AttestationBaseUnknown,
+		ToolExtractionFailed,
+		SigningConfigInvalid,
+		PublishBundleInvalid,
+		PublishTagInvalid,
+		AttestSubjectUnresolved,
+		InternalError,
 	}
 }

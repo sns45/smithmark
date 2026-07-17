@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -79,5 +81,54 @@ func TestCanonicalIsDeterministicAndSorted(t *testing.T) {
 			t.Errorf("Canonical output keys not in alphabetical order: %s at %d does not follow previous key at %d", k, i, prev)
 		}
 		prev = i
+	}
+}
+
+// addNumbersSchema is the same fixed schema string pkg/discover's fakemcp
+// fixture and mcptools_test.go both use for the add_numbers tool (Task 2.3):
+// one pinned vector here proves the algorithm, and pkg/discover reuses it
+// end to end through ExtractTools and ToolsFromFile.
+const addNumbersSchema = `{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}`
+
+// pinnedAddNumbersSchemaDigest is computed once from addNumbersSchema at
+// implementation time and then frozen, mirroring pkg/core/bundle's own
+// golden vector rule: recompute only if the algorithm is believed wrong,
+// never to make a failing test pass.
+const pinnedAddNumbersSchemaDigest = "710001a478edca4fcc7ed6cf35253c1dc872c3bf5e691a091b35f3c4fde52779"
+
+func TestSchemaDigestPinnedVector(t *testing.T) {
+	digest, err := SchemaDigest(json.RawMessage(addNumbersSchema))
+	if err != nil {
+		t.Fatalf("SchemaDigest: %v", err)
+	}
+	want := DigestSet{"sha256": pinnedAddNumbersSchemaDigest}
+	if !reflect.DeepEqual(digest, want) {
+		t.Errorf("SchemaDigest = %+v, want %+v", digest, want)
+	}
+}
+
+// TestSchemaDigestKeyOrderIndependent proves canonicalization, not raw byte
+// hashing: two JSON objects with the same keys and values in different
+// orders must digest identically.
+func TestSchemaDigestKeyOrderIndependent(t *testing.T) {
+	a, err := SchemaDigest(json.RawMessage(`{"a":1,"b":2}`))
+	if err != nil {
+		t.Fatalf("SchemaDigest: %v", err)
+	}
+	b, err := SchemaDigest(json.RawMessage(`{"b":2,"a":1}`))
+	if err != nil {
+		t.Fatalf("SchemaDigest: %v", err)
+	}
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("SchemaDigest differs by key order: %+v vs %+v", a, b)
+	}
+}
+
+func TestSchemaDigestRejectsEmptySchema(t *testing.T) {
+	if _, err := SchemaDigest(nil); err == nil {
+		t.Error("empty schema accepted; SchemaDigest must return an error")
+	}
+	if _, err := SchemaDigest(json.RawMessage{}); err == nil {
+		t.Error("empty schema accepted; SchemaDigest must return an error")
 	}
 }
