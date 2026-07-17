@@ -76,15 +76,30 @@ go build -o "${SMITHMARK_BIN}" "${REPO_ROOT}/cmd/smithmark" 2>&1
 echo "Binary built: ${SMITHMARK_BIN}"
 
 CONFIG_FILE="$(mktemp)"
+# A PATH stub containing only a symlink to the real bash, and nothing else,
+# so a hook run against this PATH can still find bash to execute the script
+# under, but truly cannot find jq anywhere, regardless of where the host
+# itself keeps it. Mirrors the PATH stub technique
+# action/entrypoint_test.sh already uses for its own operational fallback
+# tests (a directory prepended to PATH shadowing real tools).
+NO_JQ_DIR="$(mktemp -d)"
+ln -s "$(command -v bash)" "${NO_JQ_DIR}/bash"
+
 # shellcheck disable=SC2329 # invoked indirectly through the EXIT trap below
-cleanup() { rm -f "${SMITHMARK_BIN}" "${CONFIG_FILE}"; }
+cleanup() { rm -f "${SMITHMARK_BIN}" "${CONFIG_FILE}"; rm -rf "${NO_JQ_DIR}"; }
 trap cleanup EXIT
 
 TRUST_ROOT="${TESTDATA}/signature/test-signing-key-pub.pem"
 
 # ---------------------------------------------------------------------------
 # Step 1: the sidecar config this suite's synthetic MCP servers resolve
-# through, exactly the format README.md documents.
+# through, exactly the format README.md documents. "gone" carries no bundle
+# and points at a path that does not exist, so smithmark verify hits a real,
+# purely local operational failure (no local directory, no "@" so it is not
+# a parseable npm name@version, and no "/" beyond a plain path so it is not
+# read as an oci reference either): DISCOVERY_FAILED, offline, in well under
+# a second, exercising the hook's actual exit 3 branch end to end rather
+# than the pre verify short circuit the unconfigured server test below hits.
 # ---------------------------------------------------------------------------
 jq -n \
   --arg misArtifact "${TESTDATA}/skills/misdeclared-skill" \
@@ -92,9 +107,11 @@ jq -n \
   --arg helloArtifact "${TESTDATA}/skills/hello-skill" \
   --arg helloBundle "${TESTDATA}/signature/skill/valid.sigstore.json" \
   --arg trustRoot "${TRUST_ROOT}" \
+  --arg goneArtifact "${TESTDATA}/does-not-exist-artifact-for-hook-test" \
   '{
     "misdeclared": {"artifact": $misArtifact, "bundle": $misBundle, "trustRoot": $trustRoot},
-    "hello": {"artifact": $helloArtifact, "bundle": $helloBundle, "trustRoot": $trustRoot}
+    "hello": {"artifact": $helloArtifact, "bundle": $helloBundle, "trustRoot": $trustRoot},
+    "gone": {"artifact": $goneArtifact}
   }' > "${CONFIG_FILE}"
 
 # run_hook <tool_name>: builds a minimal, realistic PreToolUse payload for
@@ -115,6 +132,33 @@ run_hook() {
     SMITHMARK_BIN="${SMITHMARK_BIN}" \
     SMITHMARK_HOOK_CONFIG="${CONFIG_FILE}" \
     SMITHMARK_HOOK_ALLOW_ON_ERROR="${SMITHMARK_HOOK_ALLOW_ON_ERROR:-}" \
+    bash "${HOOK}" >"${stdout_file}" 2>"${stderr_file}" || code=$?
+  HOOK_EXIT="${code}"
+  HOOK_STDOUT="$(cat "${stdout_file}")"
+  HOOK_STDERR="$(cat "${stderr_file}")"
+  rm -f "${stdout_file}" "${stderr_file}"
+}
+
+# run_hook_no_jq <tool_name> <allow_on_error>: same idea as run_hook, but
+# runs the hook with PATH replaced by NO_JQ_DIR, so jq is entirely
+# unreachable no matter where the host itself installs it. Used to prove the
+# jq missing fallback (raw exit code 2 block, never the JSON mechanism) and
+# that SMITHMARK_HOOK_ALLOW_ON_ERROR cannot leak into that branch.
+run_hook_no_jq() {
+  local tool_name="$1" allow_on_error="$2"
+  local payload
+  payload="$(jq -n --arg tn "${tool_name}" --arg cwd "${REPO_ROOT}" \
+    '{session_id: "test-session", cwd: $cwd, permission_mode: "default",
+      hook_event_name: "PreToolUse", tool_name: $tn, tool_input: {}}')"
+  local stdout_file stderr_file
+  stdout_file="$(mktemp)"
+  stderr_file="$(mktemp)"
+  local code=0
+  printf '%s' "${payload}" | env \
+    PATH="${NO_JQ_DIR}" \
+    SMITHMARK_BIN="${SMITHMARK_BIN}" \
+    SMITHMARK_HOOK_CONFIG="${CONFIG_FILE}" \
+    SMITHMARK_HOOK_ALLOW_ON_ERROR="${allow_on_error}" \
     bash "${HOOK}" >"${stdout_file}" 2>"${stderr_file}" || code=$?
   HOOK_EXIT="${code}"
   HOOK_STDOUT="$(cat "${stdout_file}")"
@@ -186,6 +230,53 @@ SMITHMARK_HOOK_ALLOW_ON_ERROR="true" run_hook "mcp__unknown__do_something"
 assert_exit "permissive override exit" 0 "${HOOK_EXIT}"
 assert_json_field "permissive override decision" ".hookSpecificOutput.permissionDecision" "allow" "${HOOK_STDOUT}"
 assert_contains "permissive override stderr mentions the override" "SMITHMARK_HOOK_ALLOW_ON_ERROR" "${HOOK_STDERR}"
+
+# ---------------------------------------------------------------------------
+# Test 6: a real smithmark verify operational failure, exit 3, offline: the
+# "gone" server's artifact does not exist and carries no bundle, so verify
+# itself (not this hook) fails closed with DISCOVERY_FAILED before ever
+# reaching a signature check. This exercises the hook's actual catch all
+# branch that parses the operational code and detail out of verify's own
+# stderr JSON, unlike Test 4 above, which never runs verify at all. Default
+# posture still fails closed: deny, naming the real code.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 6: real smithmark verify exit 3 (nonexistent artifact, no bundle), offline (expect deny naming DISCOVERY_FAILED) ==="
+run_hook "mcp__gone__something"
+assert_exit "real exit 3 hook exit" 0 "${HOOK_EXIT}"
+assert_json_field "real exit 3 decision" ".hookSpecificOutput.permissionDecision" "deny" "${HOOK_STDOUT}"
+assert_contains "real exit 3 stderr names DISCOVERY_FAILED" "DISCOVERY_FAILED" "${HOOK_STDERR}"
+assert_contains "real exit 3 stderr distinguishes could not verify" "COULD NOT VERIFY" "${HOOK_STDERR}"
+assert_contains "real exit 3 stderr says failing closed" "failing closed" "${HOOK_STDERR}"
+
+# ---------------------------------------------------------------------------
+# Test 7: the same real exit 3, with the documented permissive override set,
+# allows instead.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 7: real smithmark verify exit 3 with SMITHMARK_HOOK_ALLOW_ON_ERROR=true (expect allow) ==="
+SMITHMARK_HOOK_ALLOW_ON_ERROR="true" run_hook "mcp__gone__something"
+assert_exit "real exit 3 override exit" 0 "${HOOK_EXIT}"
+assert_json_field "real exit 3 override decision" ".hookSpecificOutput.permissionDecision" "allow" "${HOOK_STDOUT}"
+assert_contains "real exit 3 override stderr mentions the override" "SMITHMARK_HOOK_ALLOW_ON_ERROR" "${HOOK_STDERR}"
+
+# ---------------------------------------------------------------------------
+# Test 8: jq missing from PATH entirely. The hook cannot safely produce a
+# JSON decision without jq, so it must fall back to the raw exit code 2
+# block mechanism, and SMITHMARK_HOOK_ALLOW_ON_ERROR must never reach this
+# branch at all: it is a jq missing bail out, not a could not check decision,
+# so the override has nothing to act on and the call still blocks.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 8: jq missing on PATH (expect raw exit 2 block; ALLOW_ON_ERROR does not leak in) ==="
+run_hook_no_jq "mcp__hello__greet" "true"
+assert_exit "jq missing exit" 2 "${HOOK_EXIT}"
+assert_contains "jq missing stderr message" "jq is required" "${HOOK_STDERR}"
+if [[ -z "${HOOK_STDOUT}" ]]; then
+  pass "jq missing: no JSON decision printed (raw exit code mechanism only)"
+else
+  fail "jq missing: unexpectedly printed a JSON decision: ${HOOK_STDOUT}"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary

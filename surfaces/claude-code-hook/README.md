@@ -104,7 +104,7 @@ Merge `settings.example.json` into your project's `.claude/settings.json`
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/surfaces/claude-code-hook/verify-mcp.sh"
+            "command": "\"${CLAUDE_PROJECT_DIR}/surfaces/claude-code-hook/verify-mcp.sh\""
           }
         ]
       }
@@ -113,10 +113,12 @@ Merge `settings.example.json` into your project's `.claude/settings.json`
 }
 ```
 
-`$CLAUDE_PROJECT_DIR` is a path placeholder Claude Code expands to the
+`${CLAUDE_PROJECT_DIR}` is a path placeholder Claude Code expands to the
 project root before running the command, so the hook resolves correctly
 regardless of the shell's own working directory when Claude Code launches
-it.
+it. The braced, double quoted form matches the documentation's own
+convention for a shell form path placeholder, so a project root containing
+a space still resolves to one argument rather than splitting apart.
 
 ## Configuring which artifact a server maps to
 
@@ -153,6 +155,18 @@ Shape, keyed by server name (the identity extracted from `tool_name`):
   file, bypassing discovery.
 - `attestationBase` (optional): maps to `--attestation-base`, the OCI
   registry base for attestation discovery.
+
+A plugin bundled server's `tool_name` carries the shape
+`mcp__plugin_<plugin>_<server>__<tool>` (documented above), so the identity
+this hook extracts for such a server is the full `plugin_<plugin>_<server>`
+string, not the bare `<server>` name alone. A sidecar entry for a plugin
+bundled server must therefore be keyed by that full string, for example
+`"plugin_acme_weather"` for plugin `acme`'s server `weather`, never by
+`"weather"` on its own; using the bare name would leave the entry unreached,
+falling through to "no configured artifact" for that server. This follows
+directly from the documentation's own matcher guidance for plugin scoped
+MCP tools (`mcp__plugin_<plugin>_<server>__.*`), which addresses a plugin
+bundled server the same, full way.
 
 Relative paths inside the sidecar (`trustRoot`, `bundle`, a local `artifact`
 directory) are passed straight through to `smithmark verify` and resolved
