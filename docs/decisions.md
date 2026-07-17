@@ -120,6 +120,8 @@ assayward's `Evidence` has no schema version field today. The cross repo contrac
 
 Amendment 2026-07-17 (M4, lint findings are not yet carried in Evidence): `smithmark verify` populates `VerificationReport.Findings` from the capability lint over a local source tree and gates the `--strict` exit 2 on them (D4), but the assayward compatible Evidence block does NOT carry those findings, because assayward's `Evidence` has no findings field. The M5 Task 5.4 issue therefore asks for a third thing alongside the `ArtifactRef` widening and the `schemaVersion` field: that Evidence carry the lint findings, or a findings digest, so a policy engine can weigh them without re running the lint itself. Until that lands, findings live only in smithmark's own report surface, never in the Evidence handed to assayward.
 
+Filed 2026-07-17 (M5 Task 5.4): the work item covering all three asks (kind tagged `ArtifactRef` with algorithm aware digest matching, an explicit `schemaVersion`, and lint findings in Evidence) is `sns45/assayward#1` (https://github.com/sns45/assayward/issues/1). The issue also flags the `verify/slsa.go` unconditional `sha256:` strip as the concrete reason the digest widening must be algorithm aware. smithmark drops the `SignatureNote` kind shim once the widening ships in a tagged assayward release.
+
 ## U6: Digest representation
 
 in-toto DigestSet style throughout: `{"<alg>": "<hex>"}`. npm `sha512-<base64>` integrity strings are converted to hex at ingestion. Normative.
