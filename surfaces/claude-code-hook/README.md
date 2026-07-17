@@ -81,8 +81,12 @@ Confirmed facts from that documentation, matched line for line by
     }
   }
   ```
-  lets the hook return a structured decision (`allow`, `deny`, or `ask`) with
-  an explanation. This shim uses the second mechanism for every decision it
+  lets the hook return a structured decision, one of the four documented
+  `permissionDecision` values, `allow`, `deny`, `ask`, or `defer`, with an
+  explanation. This shim only ever emits two of the four: `allow` or `deny`;
+  it never returns `ask` or `defer`, since every branch below resolves to a
+  definite admission decision rather than deferring to the user or another
+  layer. This shim uses the second mechanism for every decision it
   can actually make, since it wants the structured, explainable reason; the
   raw exit code 2 mechanism is reserved for the one situation where this
   hook cannot safely produce JSON at all (`jq` missing, see below). A hook
@@ -119,6 +123,15 @@ regardless of the shell's own working directory when Claude Code launches
 it. The braced, double quoted form matches the documentation's own
 convention for a shell form path placeholder, so a project root containing
 a space still resolves to one argument rather than splitting apart.
+
+An adopter wiring this into a project other than smithmark itself must
+account for one thing: `${CLAUDE_PROJECT_DIR}` resolves to the consuming
+project's own root, not to smithmark's checkout, so the settings snippet
+above only resolves as written when it runs from inside a checkout of
+smithmark itself. Adopting it elsewhere means either vendoring
+`verify-mcp.sh` into that project's own repository at the same relative
+path, or pointing the command at an absolute path to wherever smithmark's
+checkout actually lives.
 
 ## Configuring which artifact a server maps to
 

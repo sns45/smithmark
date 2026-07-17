@@ -242,6 +242,46 @@ assert_contains "corrupted archive extraction error" "failed to extract" "${OUTP
 assert_contains "corrupted archive fallback attempted" "falling back to go install" "${OUTPUT_6}"
 
 # ---------------------------------------------------------------------------
+# Test 7: GITHUB_OUTPUT carries the exact exit code (N6 review fix). Every
+# test above runs with GITHUB_OUTPUT unset and must not fail under set -u;
+# this test proves the write path itself by pointing GITHUB_OUTPUT at a real
+# file exactly like a genuine GitHub Actions runner would, for both a
+# passing and a failing verification, so a CI author's follow up step can
+# branch on steps.<id>.outputs.exit-code instead of only success or failure.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 7: GITHUB_OUTPUT carries the exact exit code (expect exit-code=0) ==="
+GITHUB_OUTPUT_FILE="$(mktemp)"
+EXIT_7=0
+env \
+  SMITHMARK_INSTALL_FROM="${SMITHMARK_BIN}" \
+  SMITHMARK_REF="${SKILL_REF}" \
+  SMITHMARK_BUNDLE="${VALID_BUNDLE}" \
+  SMITHMARK_TRUST_ROOT="${TRUST_ROOT}" \
+  SMITHMARK_OUTPUT="summary" \
+  GITHUB_OUTPUT="${GITHUB_OUTPUT_FILE}" \
+  bash "${SCRIPT_DIR}/entrypoint.sh" >/dev/null 2>&1 || EXIT_7=$?
+assert_exit "GITHUB_OUTPUT valid bundle" 0 "${EXIT_7}"
+assert_contains "GITHUB_OUTPUT valid bundle exit-code" "exit-code=0" "$(cat "${GITHUB_OUTPUT_FILE}")"
+rm -f "${GITHUB_OUTPUT_FILE}"
+
+echo ""
+echo "=== Test 7b: GITHUB_OUTPUT carries the exact exit code (expect exit-code=1) ==="
+GITHUB_OUTPUT_FILE="$(mktemp)"
+EXIT_7B=0
+env \
+  SMITHMARK_INSTALL_FROM="${SMITHMARK_BIN}" \
+  SMITHMARK_REF="${SKILL_REF}" \
+  SMITHMARK_BUNDLE="${TAMPERED_BUNDLE}" \
+  SMITHMARK_TRUST_ROOT="${TRUST_ROOT}" \
+  SMITHMARK_OUTPUT="summary" \
+  GITHUB_OUTPUT="${GITHUB_OUTPUT_FILE}" \
+  bash "${SCRIPT_DIR}/entrypoint.sh" >/dev/null 2>&1 || EXIT_7B=$?
+assert_exit "GITHUB_OUTPUT tampered bundle" 1 "${EXIT_7B}"
+assert_contains "GITHUB_OUTPUT tampered bundle exit-code" "exit-code=1" "$(cat "${GITHUB_OUTPUT_FILE}")"
+rm -f "${GITHUB_OUTPUT_FILE}"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

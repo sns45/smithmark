@@ -45,6 +45,11 @@ inputs:
     required: false
     default: "latest"
 
+outputs:
+  exit-code:
+    description: "The exact smithmark verify exit code (0, 1, 2, or 3), so a follow up step can branch on steps.<id>.outputs.exit-code rather than only on success or failure."
+    value: ${{ steps.verify.outputs.exit-code }}
+
 runs:
   using: "composite"
   steps:

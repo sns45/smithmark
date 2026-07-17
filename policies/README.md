@@ -54,10 +54,21 @@ unknown fields.
 | Rekor entry required | no (smithmark v0.1 verify is key based offline) | yes (anticipates the M6 keyless CI migration) | unchanged |
 | SLSA minimum level | L2 | L3 | unchanged |
 | SBOM required | yes | yes | unchanged |
-| Max unmitigated VEX severity | high (no unmitigated criticals) | high | unchanged |
+| Max unmitigated VEX severity | high, binary affected gate (see caveat below) | high, binary affected gate (see caveat below) | severity aware gating |
 | Workload identity required | no | yes | unchanged |
 | Undeclared network egress denied | not expressible | not expressible | one denied finding |
 | All undeclared capability classes denied | not expressible | not expressible | full denied findings list |
+
+Caveat on the VEX row: `vex.maxUnmitigatedSeverity` in assayward v0.1.0 is a
+binary affected gate, not a severity threshold. Any CVE whose VEX status is
+affected fails the check regardless of the configured value
+(`pkg/core/policy/evaluate.go` in the pinned assayward module; the emitted
+reason is `VEX_UNMITIGATED_CRITICAL` no matter the severity named). Severity
+aware gating, where the configured value actually bounds which affected
+CVEs are tolerated, lands in a future assayward version. Both policy files
+keep the field and the value `high` as is: the schema is valid today and
+the setting is forward compatible with that future gating; only this prose
+and each policy's own comment describe the gap.
 
 The lint finding codes named in the pending stanzas, `UNDECLARED_NETWORK_EGRESS`,
 `UNDECLARED_FILESYSTEM`, `UNDECLARED_EXEC`, and `UNDECLARED_ENV`, already exist

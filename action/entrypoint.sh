@@ -222,4 +222,17 @@ case "${CODE}" in
   *) echo "::error::smithmark verify exited ${CODE}: operational failure" >&2 ;;
 esac
 
+# ---------------------------------------------------------------------------
+# 4. Surface the exit code as a step output, so a CI author can branch on
+# steps.<id>.outputs.exit-code (declared in action.yml) with a follow up
+# if: always() step, rather than only ever seeing success or failure at the
+# job level. GITHUB_OUTPUT is unset when this script runs outside a real
+# GitHub Actions job, exactly the case this action's own offline test suite
+# and any local invocation are in, so the write is skipped rather than
+# failing under set -u.
+# ---------------------------------------------------------------------------
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "exit-code=${CODE}" >> "${GITHUB_OUTPUT}"
+fi
+
 exit "${CODE}"

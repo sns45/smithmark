@@ -39,6 +39,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: bash action/entrypoint_test.sh
 
+      # Offline test for the Claude Code hook shim (Task 5.2): builds the
+      # local smithmark binary and drives verify-mcp.sh with synthetic
+      # PreToolUse payloads over the committed signed fixtures under
+      # testdata/, so no network call is ever made here either. Ubuntu only,
+      # matching the action offline test step above: the suite is platform
+      # independent, so one runner suffices.
+      - name: Claude Code hook offline test
+        if: matrix.os == 'ubuntu-latest'
+        run: bash surfaces/claude-code-hook/test.sh
+
       # Static validation of the release config, so a broken .goreleaser.yaml is
       # caught on every PR rather than only at tag time. Run via the ephemeral
       # go run form Task 2.9 used, pinned to the version Task 2.9 resolved

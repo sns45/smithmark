@@ -83,11 +83,13 @@ Because this is a composite action, the step's exit code propagates directly to 
 | `2` | Strict lint gate: a passing verification carried an `UNDECLARED_` finding under `strict: "true"` | Step fails with an `::error::` annotation, failing the job |
 | `3` | Operational failure: bad configuration, an unusable binary, a network error, or a required input missing | Step fails with an `::error::` annotation, failing the job |
 
-A CI author who wants to branch on the difference between a real verification failure (`1`), a strict lint flag (`2`), and an operational problem (`3`) can add a follow up step with `if: always()` that inspects `steps.<id>.outcome` or reruns the check with `continue-on-error: true` set on the verify step itself.
+The step also writes its exact exit code to an `exit-code` output (`entrypoint.sh` runs `echo "exit-code=${CODE}" >> "$GITHUB_OUTPUT"`; `action.yml` declares it). A CI author who wants to branch on the difference between a real verification failure (`1`), a strict lint flag (`2`), and an operational problem (`3`) sets `continue-on-error: true` on the verify step so the job does not stop there, then adds a follow up step with `if: always()` that inspects `steps.<id>.outputs.exit-code` and branches on its value. `steps.<id>.outcome` alone only ever reports `success` or `failure`, never the exact code, so it cannot distinguish `1` from `2` from `3` on its own.
 
 ## Version caveat
 
 As of this writing, `sns45/smithmark` has not published a release yet: `version: "latest"` currently resolves to nothing on the release download path, and the action falls back to `go install` (a real network call to the Go module proxy, not the release archive). Once a release ships, pin `version` to a specific tag such as `v0.1.0` for reproducible CI, rather than relying on `latest` or the `go install` fallback.
+
+The action ref itself carries the same caveat: `uses: sns45/smithmark/action@v0.1` in the examples above is the intended stable form once the first tagged release ships, exactly like the `version` input. Until then, that tag does not exist, so an adopter using this action today must reference it by a branch name or a commit sha instead of `@v0.1`.
 
 ## Offline and air gapped use
 

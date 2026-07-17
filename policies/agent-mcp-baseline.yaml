@@ -9,11 +9,35 @@
 #
 # smithmark never decides here (spec section 1.3). It only produces the
 # Evidence block (pkg/core/verify.EvidenceBlock) that this policy evaluates,
-# inside assayward, not inside smithmark. A typical wiring:
+# inside assayward, not inside smithmark.
 #
-#   smithmark verify --ref <mcp server ref> --evidence-out evidence.json
-#   assayward verify --policy policies/agent-mcp-baseline.yaml \
-#     --evidence evidence.json
+# Today: smithmark verify's positional argument takes the artifact directly,
+# there is no --ref and no --evidence-out flag. The Evidence block lives in
+# the .evidence field of the --output json report, produced with:
+#
+#   smithmark verify <mcp server ref> --trust-root <pubkey> --output json
+#
+# assayward v0.1.0 has no CLI flag that ingests that Evidence JSON directly:
+# its own verify command takes --policy-file (or a built in --policy name)
+# plus --image, with --bundle, --from-oci, or --forgeseal-output supplying
+# the attestation evidence, none of which reads a smithmark report. Today
+# the two sides are proven compatible only at the Go type level: the pinned
+# contract test (pkg/core/verify/contract_test.go) round trips smithmark's
+# Evidence block through assayward's own pkg/core.Evidence type with strict
+# decoding. CLI level ingestion of a smithmark Evidence block is tracked in
+# PENDING assayward#1 (https://github.com/sns45/assayward/issues/1).
+#
+# Intended end to end wiring once assayward#1 ships (PENDING assayward#1;
+# NOT a working command today):
+#
+#   smithmark verify <mcp server ref> --trust-root <pubkey> --output json \
+#     > report.json
+#
+#   Then assayward would evaluate policies/agent-mcp-baseline.yaml against
+#   the Evidence carried in report.json's .evidence field. assayward v0.1.0
+#   names no flag for that step, so none is shown here; once assayward#1
+#   ships, the assayward side of this line grows a real flag and this
+#   comment is updated to a runnable command rather than prose.
 #
 # Validated against the pinned assayward v0.1.0 CLI with:
 #   go run github.com/sns45/assayward/cmd/assayward@v0.1.0 \
@@ -56,7 +80,14 @@ spec:
 
   vex:
     # No affected criticals unmitigated; high and below may ship with an
-    # accepted VEX statement.
+    # accepted VEX statement. Caveat: in assayward v0.1.0 this field acts as
+    # a binary affected gate rather than a severity aware one: any CVE whose
+    # VEX status is affected fails the check regardless of the value set
+    # here, per assayward's pkg/core/policy/evaluate.go. Severity aware
+    # gating, where this value would actually bound which affected CVEs are
+    # tolerated, lands in a future assayward version. The field and the
+    # value high are kept as is: the schema is valid today and the setting
+    # is forward compatible with that future gating.
     maxUnmitigatedSeverity: high
 
   sbom:
