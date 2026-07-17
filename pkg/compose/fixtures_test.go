@@ -92,8 +92,9 @@ func loadFixtureEnvelope(t *testing.T, subject, variant string) *protodsse.Envel
 }
 
 // dsseSignatureVerifies reports whether the envelope's single DSSE signature
-// verifies against pub over the sigstore reconstructed pre-auth encoding, the
-// exact bytes signWithKey signed. It never hand rolls ecdsa.Verify.
+// verifies against pub over the sigstore reconstructed pre authentication
+// encoding, the exact bytes signWithKey signed. It never hand rolls
+// ecdsa.Verify.
 func dsseSignatureVerifies(t *testing.T, pub *ecdsa.PublicKey, env *protodsse.Envelope) bool {
 	t.Helper()
 	sigs := env.GetSignatures()

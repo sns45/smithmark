@@ -9,10 +9,13 @@
 // this main package is never compiled by the ordinary build. It is invoked
 // explicitly instead:
 //
-//	go run ./testdata/gen           # regenerate every fixture
-//	go run ./testdata/gen --check   # verify the committed fixtures stay honest
+//	go run ./testdata/gen               # regenerate every fixture (requires the committed key)
+//	go run ./testdata/gen --check       # verify the committed fixtures stay honest
+//	go run ./testdata/gen --bootstrap   # mint a fresh throwaway key, then regenerate
 //
-// Both commands run from the repository root.
+// All three commands run from the repository root. Regeneration refuses to run
+// when no key is committed unless --bootstrap is passed, so a missing key never
+// silently swaps the trust anchor out from under the committed fixtures.
 //
 // DETERMINISM: the statement payloads are fully deterministic. The clock is the
 // fixed constant fixedGeneratedAt, the generator identity is fixed, the skill
@@ -118,7 +121,12 @@ const (
 func main() {
 	log.SetFlags(0)
 	check := flag.Bool("check", false, "verify the committed fixtures still verify and carry the expected payloads, instead of regenerating them")
+	bootstrap := flag.Bool("bootstrap", false, "mint a fresh throwaway signing key when none is committed; this replaces the committed public key and every committed bundle")
 	flag.Parse()
+
+	if *check && *bootstrap {
+		log.Fatalf("--check and --bootstrap are mutually exclusive: --check only reads the committed fixtures, while --bootstrap mints a new key and rewrites them")
+	}
 
 	specs := []subjectSpec{buildSkillSubject(), buildNPMSubject()}
 
@@ -127,7 +135,7 @@ func main() {
 		return
 	}
 
-	loadOrCreateKey()
+	loadOrBootstrapKey(*bootstrap)
 	ctx := context.Background()
 	signer := compose.NewSigner()
 	for _, spec := range specs {
@@ -289,8 +297,9 @@ func signOrDie(ctx context.Context, signer compose.Signer, stmt *manifest.Statem
 }
 
 // tamperSignature parses the bundle JSON, base64 decodes the single DSSE
-// signature, flips one byte of it, re-encodes, and re-marshals. The result is
-// valid JSON with the payload untouched and only the signature corrupted.
+// signature, flips one byte of it, encodes it again, and marshals the bundle
+// back to JSON. The result is valid JSON with the payload untouched and only
+// the signature corrupted.
 func tamperSignature(validBundle []byte) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(validBundle, &doc); err != nil {
@@ -340,23 +349,33 @@ func writeFixture(subject, variant string, data []byte) {
 	log.Printf("wrote %s", path)
 }
 
-// loadOrCreateKey ensures the committed test signing key pair exists. When the
-// private key is already committed it is loaded and never regenerated, so
-// regeneration reuses the same key and the committed public key keeps verifying
-// every bundle. Only when no key is committed is a fresh ECDSA P-256 key
-// generated. The public key is always re-derived and written, so it can never
-// drift from the private key.
-func loadOrCreateKey() {
+// loadOrBootstrapKey ensures the committed test signing key pair exists before
+// regeneration signs anything. When the private key is already committed it is
+// loaded and never regenerated, so regeneration reuses the same key and the
+// committed public key keeps verifying every bundle. When no key is committed
+// the behavior depends on bootstrap: without it, this refuses and exits, naming
+// the expected path and the flag, so a missing key never silently mints a new
+// trust anchor and resigns every fixture; with it, a fresh ECDSA P-256 key is
+// minted after a loud warning. The public key is always derived afresh from the
+// private key and written, so the two can never drift apart.
+func loadOrBootstrapKey(bootstrap bool) {
 	priv, err := readPrivateKey(privKeyPath)
 	switch {
 	case err == nil:
 		writePublicKey(priv)
 		return
 	case errors.Is(err, os.ErrNotExist):
-		// fall through to generation
+		// fall through to the bootstrap decision
 	default:
 		log.Fatalf("reading committed signing key %s: %v", privKeyPath, err)
 	}
+
+	if !bootstrap {
+		log.Fatalf("no committed signing key at %s; refusing to mint one silently. Pass --bootstrap to generate a fresh throwaway key, which replaces the committed public key and resigns every committed bundle.", privKeyPath)
+	}
+
+	log.Printf("WARNING: --bootstrap is minting a fresh throwaway signing key at %s.", privKeyPath)
+	log.Printf("WARNING: this replaces the committed public key %s and resigns every committed bundle; the old public key will no longer verify any of them.", pubKeyPath)
 
 	if err := os.MkdirAll(signatureDir, 0o755); err != nil {
 		log.Fatalf("creating %s: %v", signatureDir, err)
@@ -369,7 +388,7 @@ func loadOrCreateKey() {
 	if err := os.WriteFile(privKeyPath, privPEM, 0o600); err != nil {
 		log.Fatalf("writing %s: %v", privKeyPath, err)
 	}
-	log.Printf("generated a new throwaway test signing key at %s", privKeyPath)
+	log.Printf("minted a new throwaway test signing key at %s", privKeyPath)
 	writePublicKey(fresh)
 }
 
@@ -522,7 +541,8 @@ func loadEnvelope(subject, variant string) (*protodsse.Envelope, error) {
 }
 
 // signatureVerifies reports whether the envelope's single DSSE signature
-// verifies against pub over the sigstore reconstructed pre-auth encoding.
+// verifies against pub over the sigstore reconstructed pre authentication
+// encoding.
 func signatureVerifies(pub *ecdsa.PublicKey, env *protodsse.Envelope) bool {
 	sigs := env.GetSignatures()
 	if len(sigs) != 1 {

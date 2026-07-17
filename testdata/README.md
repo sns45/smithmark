@@ -21,8 +21,9 @@ verification tests have realistic signed inputs with no network in CI.
 From the repository root:
 
 ```
-go run ./testdata/gen           # regenerate every fixture under signature/
-go run ./testdata/gen --check   # verify the committed fixtures stay honest
+go run ./testdata/gen               # regenerate every fixture under signature/
+go run ./testdata/gen --check       # verify the committed fixtures stay honest
+go run ./testdata/gen --bootstrap   # mint a fresh throwaway key, then regenerate
 ```
 
 The generator lives at `testdata/gen/gen.go`. The Go toolchain excludes any
@@ -32,8 +33,14 @@ run explicitly through the commands above.
 
 If `signature/test-signing-key.pem` already exists, the generator loads it and
 never regenerates it, so regeneration reuses the same committed key and the
-committed public key keeps verifying every bundle. Only a first run on a tree
-with no committed key mints a fresh one.
+committed public key keeps verifying every bundle.
+
+If no key is committed, plain regeneration refuses and exits non zero rather
+than mint one silently, because a new key would swap the trust anchor and
+resign every fixture. Minting is gated behind `--bootstrap`, which prints a loud
+warning before it replaces the committed public key and rewrites every bundle.
+`--bootstrap` combined with `--check` is an error, since one rewrites the
+fixtures and the other only reads them.
 
 ## Determinism
 
