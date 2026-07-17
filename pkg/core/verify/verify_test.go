@@ -389,6 +389,128 @@ func TestCertExpiryNotConstructibleOffline(t *testing.T) {
 	t.Log("cert expiry is not constructible offline for key based bundles; the row lands live in M6")
 }
 
+// TestFailingChecksFailedReflectsFailingClassOnly proves the exported exit code
+// authority keys off failing class checks alone: a fully valid report, whose
+// informational checks are false by design (REKOR_INCLUSION_VALID and friends),
+// reports no failure, while a tampered report does. This is the one guard that
+// stops a naive "any failed check" mapping from wrongly rejecting a valid
+// artifact.
+func TestFailingChecksFailedReflectsFailingClassOnly(t *testing.T) {
+	valid, err := verify.Run(verify.Input{
+		Ref:           skillRef(t),
+		Bundles:       [][]byte{loadBundle(t, "skill", "valid")},
+		TrustMaterial: loadTrust(t),
+		Now:           fixedNow,
+	}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run valid: %v", err)
+	}
+	// The valid report carries false informational checks by design; the helper
+	// must not read those as a verification failure.
+	sawFalseInformational := false
+	for _, c := range valid.Checks {
+		if c.Informational && !c.Passed {
+			sawFalseInformational = true
+		}
+	}
+	if !sawFalseInformational {
+		t.Fatal("fixture precondition: the valid report should carry at least one false informational check")
+	}
+	if verify.FailingChecksFailed(valid) {
+		t.Error("FailingChecksFailed = true for a valid report; only failing class checks may drive it")
+	}
+
+	tampered, err := verify.Run(verify.Input{
+		Ref:           skillRef(t),
+		Bundles:       [][]byte{loadBundle(t, "skill", "tampered")},
+		TrustMaterial: loadTrust(t),
+		Now:           fixedNow,
+	}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run tampered: %v", err)
+	}
+	if !verify.FailingChecksFailed(tampered) {
+		t.Error("FailingChecksFailed = false for a tampered report; SIGNATURE_VALID is a failing class check")
+	}
+}
+
+// TestWinningBundleIndexes pins the WinningBundle contract the CLI relies on to
+// hand EvidenceBlock the right bytes: the zero based index of the candidate the
+// report reflects when one passed every failing class check, and -1 when none
+// did (no bundle at all, a tampered bundle, or a wrong subject).
+func TestWinningBundleIndexes(t *testing.T) {
+	trust := loadTrust(t)
+	ref := skillRef(t)
+
+	// A single valid bundle wins at index 0.
+	valid, err := verify.Run(verify.Input{Ref: ref, Bundles: [][]byte{loadBundle(t, "skill", "valid")}, TrustMaterial: trust, Now: fixedNow}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run valid: %v", err)
+	}
+	if valid.WinningBundle != 0 {
+		t.Errorf("WinningBundle = %d for a single valid bundle, want 0", valid.WinningBundle)
+	}
+
+	// With a losing candidate first and the winner second, the index is 1.
+	multi, err := verify.Run(verify.Input{Ref: ref, Bundles: [][]byte{loadBundle(t, "skill", "tampered"), loadBundle(t, "skill", "valid")}, TrustMaterial: trust, Now: fixedNow}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run multi: %v", err)
+	}
+	if multi.WinningBundle != 1 {
+		t.Errorf("WinningBundle = %d when the winner is the second candidate, want 1", multi.WinningBundle)
+	}
+
+	// No bundle at all: nothing to reflect, so -1.
+	none, err := verify.Run(verify.Input{Ref: ref, Bundles: nil, TrustMaterial: trust, Now: fixedNow}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run none: %v", err)
+	}
+	if none.WinningBundle != -1 {
+		t.Errorf("WinningBundle = %d with no bundles, want -1", none.WinningBundle)
+	}
+
+	// A tampered bundle passes no failing class stage, so -1.
+	tampered, err := verify.Run(verify.Input{Ref: ref, Bundles: [][]byte{loadBundle(t, "skill", "tampered")}, TrustMaterial: trust, Now: fixedNow}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run tampered: %v", err)
+	}
+	if tampered.WinningBundle != -1 {
+		t.Errorf("WinningBundle = %d for a tampered bundle, want -1", tampered.WinningBundle)
+	}
+
+	// A validly signed but wrong subject bundle fails SUBJECT_DIGEST_MATCH, so
+	// no candidate passed and WinningBundle is -1.
+	mismatch, err := verify.Run(verify.Input{Ref: ref, Bundles: [][]byte{loadBundle(t, "skill", "digest-mismatch")}, TrustMaterial: trust, Now: fixedNow}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run mismatch: %v", err)
+	}
+	if mismatch.WinningBundle != -1 {
+		t.Errorf("WinningBundle = %d for a wrong subject bundle, want -1", mismatch.WinningBundle)
+	}
+}
+
+// TestWinningBundleFieldIsNotSerialized proves the json:"-" tag keeps the field
+// out of the wire report, so the golden byte stream is identical with or without
+// it.
+func TestWinningBundleFieldIsNotSerialized(t *testing.T) {
+	report, err := verify.Run(verify.Input{
+		Ref:           skillRef(t),
+		Bundles:       [][]byte{loadBundle(t, "skill", "valid")},
+		TrustMaterial: loadTrust(t),
+		Now:           fixedNow,
+	}, compose.NewVerifier())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshaling report: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "winningbundle") {
+		t.Errorf("serialized report leaks the WinningBundle field: %s", raw)
+	}
+}
+
 func TestGoldenValidReport(t *testing.T) {
 	report, err := verify.Run(verify.Input{
 		Ref:           skillRef(t),

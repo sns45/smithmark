@@ -56,6 +56,31 @@ type VerificationReport struct {
 	Findings   []lint.Finding       `json:"findings"`
 	Evidence   json.RawMessage      `json:"evidence"`
 	VerifiedAt time.Time            `json:"verifiedAt"`
+	// WinningBundle is the zero based index into Input.Bundles of the candidate
+	// this report reflects when one passed every failing class cryptographic
+	// stage, or -1 when none did (no bundle at all, or every candidate failed a
+	// failing class check). The CLI reads it to hand EvidenceBlock exactly the
+	// bytes whose outcomes the report records. It is json:"-" on purpose: the
+	// wire report retains no bundle bytes, and excluding the index keeps the
+	// serialized report byte identical to a build without this field.
+	WinningBundle int `json:"-"`
+}
+
+// FailingChecksFailed reports whether any failing class check in r did not pass:
+// a check that is not informational and whose Passed bit is false. It is the
+// single authority for the exit code contract's "did verification fail" question
+// (D4). A fully valid report contains informational checks with Passed false by
+// design (REKOR_INCLUSION_VALID and the npm interop checks for a key based
+// offline bundle), so a naive "any failed check" test would wrongly reject a
+// valid artifact; every exit mapping keys off this helper instead so the rule
+// lives in exactly one place.
+func FailingChecksFailed(r *VerificationReport) bool {
+	for _, c := range r.Checks {
+		if !c.Informational && !c.Passed {
+			return true
+		}
+	}
+	return false
 }
 
 // Input is everything Run needs to verify one artifact. Ref is the identity and
@@ -109,8 +134,10 @@ func Run(in Input, sv SignatureVerifier) (*VerificationReport, error) {
 	n := len(in.Bundles)
 	if n == 0 {
 		// Presence stage, U3: no bundle fails ATTESTATION_MISSING and short
-		// circuits, marking every remaining check not evaluated.
+		// circuits, marking every remaining check not evaluated. No candidate is
+		// reflected, so there is no winning bundle.
 		report.Checks = sortChecks(missingAttestationChecks())
+		report.WinningBundle = -1
 		return report, nil
 	}
 
@@ -144,6 +171,14 @@ func Run(in Input, sv SignatureVerifier) (*VerificationReport, error) {
 	// carries the multi candidate summary.
 	selected[codes.AttestationMissing] = attestationPresentResult(n, selectedIdx, passedFound)
 	report.Checks = sortChecks(selected)
+	// The winning bundle is the passing candidate the report reflects; when no
+	// candidate passed every failing class stage the report reflects the first
+	// candidate's outcomes but there is no winner to build evidence from.
+	if passedFound {
+		report.WinningBundle = selectedIdx
+	} else {
+		report.WinningBundle = -1
+	}
 	return report, nil
 }
 
