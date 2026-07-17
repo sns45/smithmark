@@ -4,7 +4,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 
 **Kind** distinguishes how a code is used:
 - `validation`: a semantic issue found in a capability manifest or skill bundle at parse or digest time.
-- `check`: a pass or fail outcome recorded in a `VerificationReport` during `smithmark verify`.
+- `check`: a pass or fail outcome recorded in a `VerificationReport` during `smithmark verify`. Checks fall in two classes. A failing check drives the nonzero verify exit code (D4) when it fails. An informational check is marked `informational` in the report, never drives an exit code, and is left for downstream policy such as assayward to weigh; a failed informational check is a normal, non blocking observation.
 - `finding`: a declared versus detected capability gap recorded by the capability lint.
 - `operational`: a condition outside the pure core, such as a missing external tool or an unresolved configuration value.
 
@@ -32,23 +32,24 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `GENERATED_AT_INVALID` | validation | The generatedAt timestamp is zero, not in UTC, or carries sub second precision. | M1 |
 | `MANIFEST_FIELD_REQUIRED` | validation | A required identity string is empty, such as the artifact name, a generator field, an mcp tool name, or a dependency SBOM field when the dependencies block is present; also raised when a skill bundle is missing its required SKILL.md entry file. | M1 |
 | `SKILL_SCRIPT_PATH_INVALID` | validation | A skill script path is not a clean relative path using forward slashes, or two scripts share the same path. | M1 |
-| `STATEMENT_SUBJECT_INVALID` | validation | A parsed statement does not carry exactly one subject with a non empty name. | M1 |
+| `STATEMENT_SUBJECT_INVALID` | validation | A parsed statement does not carry exactly one subject with a non empty name; also raised when building an Evidence block from a report whose subject does not carry exactly one digest, the cardinality assayward's ImageRef shape requires. | M1 |
 | `BUNDLE_EMPTY` | validation | A skill bundle was given no files to digest. | M1 |
 | `BUNDLE_PATH_INVALID` | validation | A bundle file path is not a clean relative path using forward slashes. | M1 |
 | `BUNDLE_DUPLICATE_PATH` | validation | Two entries in a bundle share the same path. | M1 |
 | `BUNDLE_MODE_INVALID` | validation | A bundle file mode is not regular or executable. | M1 |
 | `BUNDLE_DIGEST_INVALID` | validation | A bundle file sha256 is not lowercase hex of the expected length. | M1 |
 | `BUNDLE_SYMLINK_REJECTED` | validation | A symlink was found while walking a skill root; reserved for M2, since the pure core defined here never touches the filesystem itself. | M1 |
-| `SIGNATURE_VALID` | check | The DSSE envelope signature verified successfully; reserved for M3. | M1 |
-| `REKOR_INCLUSION_VALID` | check | The signature's transparency log inclusion proof verified successfully; reserved for M3. | M1 |
-| `SUBJECT_DIGEST_MATCH` | check | The attested subject digest matches the digest of the artifact being verified; reserved for M3. | M1 |
-| `MANIFEST_SCHEMA_VALID` | check | The capability manifest carried by the attestation passed semantic validation; reserved for M3. | M1 |
-| `PROVENANCE_PRESENT` | check | A provenance attestation was found alongside the artifact; reserved for M3. | M1 |
-| `NPM_PROVENANCE_VERIFIED` | check | An npm package's own provenance attestation verified successfully; reserved for M3. | M1 |
-| `ATTESTATION_MISSING` | check | No attestation bundle was found for the artifact, so verification fails outright; reserved for M3. | M1 |
-| `DEPENDENCY_SBOM_MISSING` | check | The manifest carries no dependency SBOM reference, reported informationally rather than as a failure; reserved for M3. | M1 |
-| `PREDICATE_VERSION_UNSUPPORTED` | check | The predicate version inside the attestation statement is not one this build understands; reserved for M3. | M1 |
-| `HOSTED_ENDPOINT_UNSUPPORTED` | check | A registry entry points only at a remote endpoint, reported informationally since this build does not attest hosted servers; reserved for M3. | M1 |
+| `SIGNATURE_VALID` | check | Failing check: the DSSE envelope signature verified successfully against the trust material. A failure stops the payload derived checks from being trusted. | M1 |
+| `REKOR_INCLUSION_VALID` | check | Informational check: the signature's transparency log inclusion proof verified successfully. Key based offline bundles legitimately carry no inclusion entry, so this failing is a normal observation rather than a blocking one. | M1 |
+| `SUBJECT_DIGEST_MATCH` | check | Failing check: the attested subject digest matches the digest of the artifact being verified, on both the algorithm keys and their values. | M1 |
+| `MANIFEST_SCHEMA_VALID` | check | Failing check: the capability manifest carried by the attestation passed semantic validation. A failure aggregates every validation issue, so an unsupported manifest schemaVersion surfaces here as `MANIFEST_SCHEMA_VERSION_UNSUPPORTED`. | M1 |
+| `PROVENANCE_PRESENT` | check | Informational check: an npm provenance attestation was supplied and its enveloped statement declares a SLSA provenance predicate. | M1 |
+| `NPM_PROVENANCE_VERIFIED` | check | Informational check: an npm package's own provenance attestation was cryptographically verified. Full verification needs the Sigstore trust root and is exercised live in M6; the key based trust material of v0.1 does not suit it, so v0.1 reports it as not attempted. | M1 |
+| `ATTESTATION_MISSING` | check | Failing check: no attestation bundle was found for the artifact, so verification fails outright and every other check is marked not evaluated. When several candidate bundles are present, its detail carries the multi candidate summary. | M1 |
+| `DEPENDENCY_SBOM_MISSING` | check | Informational check: the manifest carries no dependency SBOM reference. It fails when the dependencies block is absent, reported as an observation rather than a blocking failure. | M1 |
+| `PREDICATE_VERSION_UNSUPPORTED` | check | Failing check: the predicate version inside the attestation statement is not one this build understands. It covers both an unknown predicateType and a predicate whose schema the strict parse cannot understand; the detail distinguishes them. | M1 |
+| `HOSTED_ENDPOINT_UNSUPPORTED` | check | Informational check: a registry entry carries no npm package this build can verify. It fails in three shapes, each with a distinct detail, the entry points only at remote endpoints (no packages at all), it carries some other non npm package ecosystem only, or it carries no distribution at all; it passes when the entry carries an npm package, since this build attests artifact distributed servers only. | M1 |
+| `REGISTRY_ATTESTATION_REF_PRESENT` | check | Informational check: an MCP Registry entry carries an attestation reference field. No such field exists in the registry schema today, so this fails for every real entry `smithmark registry check` fetches; that failure demonstrates the gap the MCP Registry provenance RFC (Task 6.4) proposes to close. | M3 |
 | `UNDECLARED_NETWORK_EGRESS` | finding | Detected code performs network egress the manifest does not declare; reserved for M4. | M1 |
 | `UNDECLARED_FILESYSTEM` | finding | Detected code accesses the filesystem in a way the manifest does not declare; reserved for M4. | M1 |
 | `UNDECLARED_EXEC` | finding | Detected code executes a binary the manifest does not declare; reserved for M4. | M1 |
@@ -65,4 +66,6 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `PUBLISH_BUNDLE_INVALID` | operational | `PushAttestation` or `AttachReferrer` was given a nil signed bundle, one carrying no bundle bytes, or one carrying an empty MediaType, to push. | M2 |
 | `PUBLISH_TAG_INVALID` | operational | A tag handed to `PushAttestation` does not match the OCI distribution spec tag grammar. `pkg/discover.AttestationRef` is the normative producer of push tags and already builds them in a provably safe shape; this fires only when a caller supplies some other tag by hand, checked before any push is attempted. | M2 |
 | `ATTEST_SUBJECT_UNRESOLVED` | operational | `smithmark attest` could not resolve exactly one subject artifact to attest: for an mcp-server, no `--tarball` was supplied and the artifact root held zero, or more than one, `*.tgz` tarball to digest, or the chosen tarball is not a gzip stream, cannot be read as a tar, or carries no `package/package.json` and so is not an npm package tarball. | M2 |
+| `DISCOVERY_FAILED` | operational | Resolving an artifact, or fetching its metadata or candidate attestations, failed operationally: an unrecognized CLI argument shape, a local declaration or skill bundle that could not be loaded or digested, an explicit `--bundle` file that could not be read, an attestation ref mapping failure, an npm registry request that could not be sent or returned an unexpected status, an undecodable packument or attestations body, a response body exceeding the size cap, an OCI target error other than an absent tag or referrer, or more matching referrers than the candidate cap. The absence of attestations, an absent OCI tag, or no npm provenance found, are never this code; those are discovery notes, since verification owns `ATTESTATION_MISSING`. | M3 |
 | `INTERNAL_ERROR` | operational | An error carrying no registry code reached the command boundary; the CLI surfaces every uncoded failure under this code so its machine readable stderr contract always carries one. | M2 |
+| `OUTPUT_FORMAT_INVALID` | operational | A command's `--output` flag carried a value other than `summary` or `json`; `verify` and `registry check` fail closed rather than silently defaulting an unrecognized format to the human summary. | M3 |

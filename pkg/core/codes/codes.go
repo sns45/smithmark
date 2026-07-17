@@ -101,7 +101,10 @@ const (
 	// relative path with forward slashes, or a duplicate script path.
 	SkillScriptPathInvalid = "SKILL_SCRIPT_PATH_INVALID"
 	// StatementSubjectInvalid reports a parsed statement that does not carry
-	// exactly one subject with a non empty name (D6 binds one artifact).
+	// exactly one subject with a non empty name (D6 binds one artifact). It is
+	// also raised by the Evidence block builder when a report subject does not
+	// carry exactly one digest, the cardinality assayward's ImageRef shape
+	// requires (U5).
 	StatementSubjectInvalid = "STATEMENT_SUBJECT_INVALID"
 )
 
@@ -160,9 +163,19 @@ const (
 	// PredicateVersionUnsupported reports that the attestation statement's
 	// predicate version is not one this build understands.
 	PredicateVersionUnsupported = "PREDICATE_VERSION_UNSUPPORTED"
-	// HostedEndpointUnsupported reports, informationally, that a registry
-	// entry points only at a remote endpoint this build does not attest.
+	// HostedEndpointUnsupported reports, informationally, that a registry entry
+	// carries no npm package this build can verify. It fails in three distinct
+	// shapes: the entry points only at remote endpoints, it carries some other
+	// non npm package ecosystem only, or it carries no distribution at all; it
+	// passes when an npm package is present, since this build attests artifact
+	// distributed servers only.
 	HostedEndpointUnsupported = "HOSTED_ENDPOINT_UNSUPPORTED"
+	// RegistryAttestationRefPresent reports, informationally, whether an MCP
+	// Registry entry carries an attestation reference field. No such field
+	// exists in the registry schema today (Task 6.4's provenance RFC proposes
+	// adding one), so this fails for every real entry; that failure is the
+	// demonstration `smithmark registry check` exists to show.
+	RegistryAttestationRefPresent = "REGISTRY_ATTESTATION_REF_PRESENT"
 )
 
 // Lint finding codes (spec 3). Phase 4 (M4) is the first consumer of these;
@@ -242,11 +255,29 @@ const (
 	// so it is not an npm package tarball at all. attest fails closed rather
 	// than guessing which one to attest.
 	AttestSubjectUnresolved = "ATTEST_SUBJECT_UNRESOLVED"
+	// DiscoveryFailed reports that resolving an artifact, or fetching its
+	// metadata or candidate attestations, failed operationally: an unrecognized
+	// CLI argument shape, a local declaration or skill bundle that could not be
+	// loaded or digested, an explicit --bundle file that could not be read, an
+	// attestation ref mapping failure, an npm registry request that could not be
+	// sent or returned an unexpected status, an undecodable packument or
+	// attestations body, a response body exceeding the size cap, an OCI target
+	// error other than an absent tag or referrer, or more matching referrers
+	// than the candidate cap. The absence of attestations themselves, an absent
+	// OCI tag, or no npm provenance found, are never this code; those are
+	// recorded as discovery notes, since verification, not discovery, owns
+	// ATTESTATION_MISSING.
+	DiscoveryFailed = "DISCOVERY_FAILED"
 	// InternalError reports that an error carrying no registry code reached the
 	// command boundary. The CLI maps every failure to a single machine readable
 	// stderr line (decision D4); an error the pure core did not tag with a code
 	// is surfaced under this operational code rather than an empty one.
 	InternalError = "INTERNAL_ERROR"
+	// OutputFormatInvalid reports that a command's --output flag carried a value
+	// other than the two this build understands (summary or json). verify and
+	// registry check both fail closed with this code rather than silently
+	// treating an unrecognized format as the human summary.
+	OutputFormatInvalid = "OUTPUT_FORMAT_INVALID"
 )
 
 // All returns every registered code.
@@ -290,6 +321,7 @@ func All() []string {
 		DependencySBOMMissing,
 		PredicateVersionUnsupported,
 		HostedEndpointUnsupported,
+		RegistryAttestationRefPresent,
 		UndeclaredNetworkEgress,
 		UndeclaredFilesystem,
 		UndeclaredExec,
@@ -305,6 +337,8 @@ func All() []string {
 		PublishBundleInvalid,
 		PublishTagInvalid,
 		AttestSubjectUnresolved,
+		DiscoveryFailed,
 		InternalError,
+		OutputFormatInvalid,
 	}
 }

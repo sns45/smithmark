@@ -1,0 +1,47 @@
+{
+  "_id": "@sentry/mcp-server",
+  "_rev": "43-22d8a4e2f6d3a8d75dd098c9217b17e1",
+  "author": {
+    "name": "Sentry"
+  },
+  "dist-tags": {
+    "latest": "0.37.0"
+  },
+  "homepage": "https://github.com/getsentry/sentry-mcp",
+  "keywords": [
+    "sentry",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "license": "FSL-1.1-ALv2",
+  "maintainers": [
+    {
+      "name": "sentry-bot",
+      "email": "accounts@sentry.io"
+    }
+  ],
+  "name": "@sentry/mcp-server",
+  "time": {
+    "created": "2025-04-24T16:11:28.178Z",
+    "modified": "2026-07-02T19:17:32.710Z"
+  },
+  "versions": {
+    "0.25.0": {
+      "_id": "@sentry/mcp-server@0.25.0",
+      "dist": {
+        "fileCount": 63,
+        "integrity": "sha512-qm9fPKdS4LD8Xa+d4+eUgbOw8WnPstjw25GuDaShTvQIoyTrGCxg6A+/SR0d9EWKX+ykPgItO2eshK+qY01OGg==",
+        "shasum": "b7f8239c5ae77fb50f11c21f3c33086a36c441e1",
+        "tarball": "https://registry.npmjs.org/@sentry/mcp-server/-/mcp-server-0.25.0.tgz",
+        "unpackedSize": 4949902
+      },
+      "name": "@sentry/mcp-server",
+      "scripts": {
+        "build": "tsdown",
+        "dev": "tsdown --watch",
+        "test": "vitest run"
+      },
+      "version": "0.25.0"
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "subject": {
+    "kind": "skill",
+    "name": "hello-skill",
+    "version": "0.1.0",
+    "digest": {
+      "smithmark-bundle-v1": "a4bdaaa7fd43eeca9269a369f0be3c87a9dedc8e052872064ad19ed26e27edda"
+    },
+    "source": "local"
+  },
+  "checks": [
+    {
+      "code": "ATTESTATION_MISSING",
+      "passed": true
+    },
+    {
+      "code": "DEPENDENCY_SBOM_MISSING",
+      "passed": false,
+      "informational": true,
+      "detail": "the capability manifest declares no dependency SBOM reference"
+    },
+    {
+      "code": "MANIFEST_SCHEMA_VALID",
+      "passed": true
+    },
+    {
+      "code": "NPM_PROVENANCE_VERIFIED",
+      "passed": false,
+      "informational": true,
+      "detail": "full verification requires the Sigstore trust root, exercised live in M6"
+    },
+    {
+      "code": "PREDICATE_VERSION_UNSUPPORTED",
+      "passed": true
+    },
+    {
+      "code": "PROVENANCE_PRESENT",
+      "passed": false,
+      "informational": true,
+      "detail": "no npm provenance attestation was provided"
+    },
+    {
+      "code": "REKOR_INCLUSION_VALID",
+      "passed": false,
+      "informational": true,
+      "detail": "no transparency log inclusion entry; key based offline bundles carry none, and verifying an inclusion proof offline needs the log key from the Sigstore trust root (M6)"
+    },
+    {
+      "code": "SIGNATURE_VALID",
+      "passed": true
+    },
+    {
+      "code": "SUBJECT_DIGEST_MATCH",
+      "passed": true
+    }
+  ],
+  "findings": [],
+  "evidence": null,
+  "verifiedAt": "2026-07-16T00:00:00Z"
+}

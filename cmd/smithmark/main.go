@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 
 	"github.com/sns45/smithmark/pkg/compose"
 	"github.com/sns45/smithmark/pkg/core/codes"
+	"github.com/sns45/smithmark/pkg/core/verify"
 )
 
 // version is the smithmark version stamped into every manifest's generator
@@ -59,9 +61,29 @@ type deps struct {
 	// tests return an in memory store, so publishing is exercised with no
 	// network.
 	NewTarget func(ctx context.Context, repo string) (oras.Target, error)
+	// Verifier checks a bundle's DSSE signature against trust material (Task
+	// 3.3). A compose.Verifier satisfies verify.SignatureVerifier structurally,
+	// so verify.Run consumes this without pkg/core importing pkg/compose.
+	// Production wires the native sigstore backed verifier; tests inject the
+	// same real verifier over committed key based fixtures, since the fixtures
+	// carry real signatures.
+	Verifier verify.SignatureVerifier
+	// Transport is the http.RoundTripper npm registry discovery is sent through
+	// (Task 3.2). A nil value means net/http's own http.DefaultTransport; tests
+	// inject a fixture serving round tripper so no test touches a real socket.
+	Transport http.RoundTripper
+	// Registry is the npm registry base URL for discovery. Empty means the real
+	// registry.npmjs.org default.
+	Registry string
+	// ReadTarget resolves a repository string into a read only oras target for
+	// attestation discovery (Task 3.2). Production returns a remote registry
+	// client; tests return an in memory store, so discovery is exercised with no
+	// network. It is distinct from NewTarget, whose push oriented oras.Target is
+	// a different, write capable interface.
+	ReadTarget func(ctx context.Context, repo string) (oras.ReadOnlyGraphTarget, error)
 	// Now is the injected clock. The pure core never reads the wall clock
-	// (spec 2.1); attest stamps generatedAt from here, and a test pins it for
-	// a deterministic golden statement.
+	// (spec 2.1); attest stamps generatedAt from here, verify stamps the report
+	// verifiedAt, and a test pins it for a deterministic golden.
 	Now func() time.Time
 	// Stdout and Stderr are where commands write. Injecting them keeps every
 	// test's output capture free of the real process streams.
@@ -79,6 +101,23 @@ func productionDeps() *deps {
 		NewTarget: func(_ context.Context, repo string) (oras.Target, error) {
 			return remote.NewRepository(repo)
 		},
+		Verifier:  compose.NewVerifier(),
+		Transport: nil, // net/http's http.DefaultTransport
+		Registry:  "",  // registry.npmjs.org
+		ReadTarget: func(_ context.Context, repo string) (oras.ReadOnlyGraphTarget, error) {
+			if repo == "" {
+				// Live OCI attestation discovery needs a per artifact repository, but
+				// v0.1 passes the attestation base straight through and does not yet
+				// scope the client to the repository AttestationRef computes; when the
+				// base resolves to empty, remote.NewRepository would fail with an
+				// uncoded error surfaced as INTERNAL_ERROR. Fail closed with a coded
+				// DISCOVERY_FAILED naming the limitation instead (tracked in
+				// sns45/smithmark#4; the live wiring lands with M6).
+				return nil, codes.E(codes.DiscoveryFailed,
+					"no OCI repository resolved for live attestation discovery; v0.1 does not yet scope the registry client to the per artifact repository AttestationRef computes (see sns45/smithmark#4). Pass --bundle to verify an explicit bundle, or wait for M6 live wiring")
+			}
+			return remote.NewRepository(repo)
+		},
 		Now:    time.Now,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
@@ -91,16 +130,26 @@ func main() {
 
 // runMain builds the command tree against d, runs it with args, and maps the
 // outcome to a process exit code. It is the one place the exit code contract
-// lives (decision D4): success is 0, and every failure is 3 with a single
-// machine readable JSON line on stderr. It returns the code rather than
-// calling os.Exit so tests assert the code directly; only main exits the
-// process.
+// lives (decision D4). Most commands are binary: success is 0, and any failure
+// is the operational 3 with a single machine readable JSON line on stderr.
+// verify additionally distinguishes a completed but negative verification from
+// an operational failure: it writes its report to stdout itself and then returns
+// a *verifyExit carrying the classified code (0, 1, or 2), which this function
+// unwraps ahead of the operational path so a failed verification never emits the
+// stderr error line. It returns the code rather than calling os.Exit so tests
+// assert the code directly; only main exits the process.
 func runMain(d *deps, args []string) int {
 	root := newRootCmd(d)
 	root.SetArgs(args)
 	root.SetOut(d.Stdout)
 	root.SetErr(d.Stderr)
 	if err := root.Execute(); err != nil {
+		var ve *verifyExit
+		if errors.As(err, &ve) {
+			// verify already wrote its report; the sentinel only conveys the
+			// classified exit code (D4), never an operational error line.
+			return ve.code
+		}
 		return emitError(d.Stderr, err)
 	}
 	return 0
@@ -150,6 +199,8 @@ func newRootCmd(d *deps) *cobra.Command {
 	root.AddCommand(newVersionCmd(d))
 	root.AddCommand(newAttestCmd(d))
 	root.AddCommand(newManifestCmd(d))
+	root.AddCommand(newVerifyCmd(d))
+	root.AddCommand(newRegistryCmd(d))
 	return root
 }
 
