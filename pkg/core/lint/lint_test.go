@@ -223,6 +223,63 @@ func TestDetectJSSortsAcrossFiles(t *testing.T) {
 	}
 }
 
+// TestDetectJSSortsByNumericLineNotLexicographic pins a real bug found in
+// review: comparing Location as one flat "path:line" string sorts "path:10"
+// before "path:7", since "1" is lexicographically less than "7". DetectJS
+// must compare the parsed line number as an integer instead, so single and
+// double digit lines on the same path come out in true numeric order.
+func TestDetectJSSortsByNumericLineNotLexicographic(t *testing.T) {
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = "// filler"
+	}
+	lines[6] = `fetch("seven");`
+	lines[9] = `fetch("ten");`
+	src := lint.Source{Path: "inline.ts", Content: []byte(strings.Join(lines, "\n") + "\n")}
+
+	dets := lint.DetectJS([]lint.Source{src})
+	if len(dets) != 2 {
+		t.Fatalf("len(dets) = %d, want 2; got %+v", len(dets), dets)
+	}
+	if dets[0].Location != "inline.ts:7" || dets[1].Location != "inline.ts:10" {
+		t.Errorf("dets = %+v, want inline.ts:7 then inline.ts:10 (numeric line order, not lexicographic)", dets)
+	}
+}
+
+// TestDetectJSFetchWordBoundaryRejectsBareIdentifier proves the word
+// boundary anchor on the fetch pattern rejects an identifier that merely
+// contains "fetch(" as a substring, such as a hypothetical customfetch(
+// call, since that is not a real fetch call site.
+func TestDetectJSFetchWordBoundaryRejectsBareIdentifier(t *testing.T) {
+	src := lint.Source{Path: "inline.ts", Content: []byte("customfetch(1);\n")}
+	dets := lint.DetectJS([]lint.Source{src})
+	if len(dets) != 0 {
+		t.Errorf("len(dets) = %d, want 0 (customfetch( must not trigger the fetch pattern); got %+v", len(dets), dets)
+	}
+}
+
+// TestDetectJSAxiosWordBoundaryRejectsBareIdentifier proves the word
+// boundary anchor on the axios pattern rejects an identifier that merely
+// contains "axios" as a substring, such as myaxioswrapper, since that names
+// no real axios import or reference.
+func TestDetectJSAxiosWordBoundaryRejectsBareIdentifier(t *testing.T) {
+	src := lint.Source{Path: "inline.ts", Content: []byte("const myaxioswrapper = 1;\n")}
+	dets := lint.DetectJS([]lint.Source{src})
+	if len(dets) != 0 {
+		t.Errorf("len(dets) = %d, want 0 (myaxioswrapper must not trigger the axios pattern); got %+v", len(dets), dets)
+	}
+}
+
+// TestDetectJSExtensionMatchIsCaseInsensitive proves an uppercase extension
+// such as .TS is still recognized and scanned, not silently skipped.
+func TestDetectJSExtensionMatchIsCaseInsensitive(t *testing.T) {
+	src := lint.Source{Path: "sample.TS", Content: []byte(`fetch("http://x");` + "\n")}
+	dets := lint.DetectJS([]lint.Source{src})
+	if len(dets) != 1 {
+		t.Errorf("len(dets) = %d, want 1 (an uppercase .TS extension must still be scanned); got %+v", len(dets), dets)
+	}
+}
+
 // TestDetectJSSkipsNonJSExtensionsSilently proves files outside the JS/TS
 // extension set are skipped without error or detection, even when their
 // content would otherwise match the table.

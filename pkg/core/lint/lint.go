@@ -68,28 +68,39 @@ type jsPattern struct {
 // quoted module strings are accepted, since either is ordinary, obvious JS
 // style and restricting to one would create an unrecorded false negative.
 //
+// The five bare identifier and call patterns (fetch, axios, undici, execa,
+// child_process) carry \b word boundary anchors so a real identifier that
+// merely contains one as a substring, such as customfetch( or
+// myaxioswrapper, does not match; a quoted module string such as "axios"
+// still matches, since the surrounding quotes are themselves boundaries.
+// Bun.spawn, process.env, and fs/promises stay unanchored on purpose: each
+// already carries a structural dot or slash a bare identifier collision
+// would rarely reproduce, and, like the comment and string literal case
+// documented on DetectJS, an occasional stray substring match there is an
+// accepted heuristic tradeoff, not a defect.
+//
 // Order matters only for which Symbol is reported when two patterns of the
 // same class both match one line: the first match in this order wins, and
 // DetectJS still emits only one Detection for that line and class either
 // way (see the DetectJS doc comment).
 var jsPatterns = []jsPattern{
 	// network
-	{"network", "fetch", regexp.MustCompile(`fetch\(`)},
+	{"network", "fetch", regexp.MustCompile(`\bfetch\(`)},
 	{"network", "http", regexp.MustCompile(`require\(\s*["']http["']\s*\)`)},
 	{"network", "https", regexp.MustCompile(`require\(\s*["']https["']\s*\)`)},
 	{"network", "net", regexp.MustCompile(`require\(\s*["']net["']\s*\)`)},
 	{"network", "http", regexp.MustCompile(`from\s*["']http["']`)},
 	{"network", "https", regexp.MustCompile(`from\s*["']https["']`)},
 	{"network", "net", regexp.MustCompile(`from\s*["']net["']`)},
-	{"network", "axios", regexp.MustCompile(`axios`)},
-	{"network", "undici", regexp.MustCompile(`undici`)},
+	{"network", "axios", regexp.MustCompile(`\baxios\b`)},
+	{"network", "undici", regexp.MustCompile(`\bundici\b`)},
 	// filesystem
 	{"filesystem", "fs", regexp.MustCompile(`require\(\s*["']fs["']\s*\)`)},
 	{"filesystem", "fs", regexp.MustCompile(`from\s*["']fs["']`)},
 	{"filesystem", "fs/promises", regexp.MustCompile(`fs/promises`)},
 	// exec
-	{"exec", "child_process", regexp.MustCompile(`child_process`)},
-	{"exec", "execa", regexp.MustCompile(`execa`)},
+	{"exec", "child_process", regexp.MustCompile(`\bchild_process\b`)},
+	{"exec", "execa", regexp.MustCompile(`\bexeca\b`)},
 	{"exec", "Bun.spawn", regexp.MustCompile(`Bun\.spawn`)},
 	// env
 	{"env", "process.env", regexp.MustCompile(`process\.env`)},
@@ -103,11 +114,16 @@ var jsPatterns = []jsPattern{
 // interprets the scanned source; it only matches literal, line anchored
 // text against the package level pattern table.
 //
-// That posture carries two accepted, documented limitations, each pinned by
-// a test rather than left to prose alone. Known false positives: a
-// commented out or otherwise inert construct still matches the line
-// pattern, since comments and string literals are not parsed out
-// (TestKnownFalsePositiveCommentedRequire). Known false negatives: a
+// That posture carries accepted, documented limitations, each pinned by a
+// test rather than left to prose alone. Known false positives: a commented
+// out or otherwise inert construct still matches the line pattern, since
+// comments and string literals are not parsed out
+// (TestKnownFalsePositiveCommentedRequire). Three patterns, Bun.spawn,
+// process.env, and fs/promises, are also left deliberately unanchored
+// beyond their own structural dot or slash, so a substring collision inside
+// some other identifier or path is possible in principle, the same accepted
+// tradeoff as the comment case, though no such collision is common enough
+// in practice to carry its own named test. Known false negatives: a
 // dynamically computed import specifier and a capability hidden behind eval
 // are never followed, since DetectJS matches literal text only and never
 // evaluates anything (TestKnownFalseNegativeDynamicImport,
@@ -117,45 +133,75 @@ var jsPatterns = []jsPattern{
 // scanned; every other Source is skipped silently, since Python sources are
 // DetectPython's responsibility starting Task 4.2.
 //
-// The result is sorted by Location, then Class, then Symbol, so identical
-// input bytes produce byte identical output on every call. At most one
-// Detection is emitted per line per class, even when more than one pattern
-// of that class matches the same line; distinct classes matching the same
-// line each still produce their own Detection.
+// The result is sorted by path, then by line as a number, then by Class,
+// then by Symbol, so identical input bytes produce byte identical output on
+// every call. The sort deliberately compares the parsed line number rather
+// than the flat "path:line" Location string: comparing Location as one
+// string would sort "path:10" before "path:7", since "1" is
+// lexicographically less than "7", putting line 10 ahead of line 7. At most
+// one Detection is emitted per line per class, even when more than one
+// pattern of that class matches the same line; distinct classes matching
+// the same line each still produce their own Detection.
 func DetectJS(files []Source) []Detection {
-	var out []Detection
+	var dets []jsDetection
 	for _, f := range files {
 		if !hasJSExtension(f.Path) {
 			continue
 		}
-		out = append(out, scanJSSource(f)...)
+		dets = append(dets, scanJSSource(f)...)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Location != out[j].Location {
-			return out[i].Location < out[j].Location
+	sort.Slice(dets, func(i, j int) bool {
+		if dets[i].path != dets[j].path {
+			return dets[i].path < dets[j].path
 		}
-		if out[i].Class != out[j].Class {
-			return out[i].Class < out[j].Class
+		if dets[i].line != dets[j].line {
+			return dets[i].line < dets[j].line
 		}
-		return out[i].Symbol < out[j].Symbol
+		if dets[i].class != dets[j].class {
+			return dets[i].class < dets[j].class
+		}
+		return dets[i].symbol < dets[j].symbol
 	})
+	out := make([]Detection, len(dets))
+	for i, d := range dets {
+		out[i] = Detection{
+			Class:    d.class,
+			Symbol:   d.symbol,
+			Location: fmt.Sprintf("%s:%d", d.path, d.line),
+		}
+	}
 	return out
 }
 
-// hasJSExtension reports whether path ends in one of jsExtensions.
+// hasJSExtension reports whether path ends in one of jsExtensions, ignoring
+// case, so a Windows style .TS or .JS path is scanned the same as .ts or
+// .js.
 func hasJSExtension(path string) bool {
+	lower := strings.ToLower(path)
 	for _, ext := range jsExtensions {
-		if strings.HasSuffix(path, ext) {
+		if strings.HasSuffix(lower, ext) {
 			return true
 		}
 	}
 	return false
 }
 
+// jsDetection is one pattern match found while scanning a Source, kept with
+// its path and line number separate until after sorting. Formatting them
+// into a single Location string before sorting would make the comparison a
+// flat string compare, which sorts "path:10" before "path:7"; keeping line
+// as an int lets DetectJS compare it numerically instead.
+type jsDetection struct {
+	class  string
+	symbol string
+	path   string
+	line   int
+}
+
 // scanJSSource applies jsPatterns to f line by line, collapsing repeat
-// matches of the same class on one line into a single Detection.
-func scanJSSource(f Source) []Detection {
-	var out []Detection
+// matches of the same class on one line into a single jsDetection.
+func scanJSSource(f Source) []jsDetection {
+	var out []jsDetection
 	scanner := bufio.NewScanner(bytes.NewReader(f.Content))
 	// Real world sources occasionally carry one very long minified or
 	// bundled line; raise the scanner's limit well past bufio's 64KiB
@@ -173,10 +219,11 @@ func scanJSSource(f Source) []Detection {
 			}
 			if p.pattern.MatchString(line) {
 				matchedClasses[p.class] = true
-				out = append(out, Detection{
-					Class:    p.class,
-					Symbol:   p.symbol,
-					Location: fmt.Sprintf("%s:%d", f.Path, lineNum),
+				out = append(out, jsDetection{
+					class:  p.class,
+					symbol: p.symbol,
+					path:   f.Path,
+					line:   lineNum,
 				})
 			}
 		}
