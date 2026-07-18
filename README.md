@@ -153,6 +153,42 @@ smithmark manifest init            # scaffold a smithmark.yaml declaration
   `--env`, `--secret`, `--transport`, `--invokes-tool`). v0.1 is flag driven; an
   interactive TTY mode is deferred.
 
+## A worked round trip
+
+A skill, attested and verified end to end offline. Every command below is the
+real v0.1 surface, run from a directory that contains a `greeter/` skill with a
+`SKILL.md`:
+
+```
+# 1. Scaffold the capability declaration next to the skill's SKILL.md
+smithmark manifest init --kind skill --name greeter --source local \
+  --exec echo --env GREETER_NAME --out greeter/smithmark.yaml
+
+# 2. Generate a signing keypair (any P256 ECDSA key works for offline signing)
+openssl ecparam -name prime256v1 -genkey -noout -out key.pem
+openssl ec -in key.pem -pubout -out key.pub.pem
+
+# 3. Attest the skill directory: bundle and digest it, sign it key based,
+#    and write the signed bundle to a file instead of pushing it
+smithmark attest ./greeter --key key.pem --skip-sbom --output greeter.sigstore.json
+
+# 4. Verify the bundle against the matching public key and print a report
+smithmark verify ./greeter --bundle greeter.sigstore.json \
+  --trust-root key.pub.pem --output summary
+
+# 5. Statically scan the sources for capabilities the declaration does not cover
+smithmark lint ./greeter
+```
+
+Step 4 prints a classified report ending in `VERIFIED greeter` and exits 0; the
+informational lines (Rekor inclusion, npm provenance) report as not attempted for
+a key based offline bundle, by design. Step 5 exits 0 with no findings when the
+declaration covers what the code does. An mcp-server follows the same shape, with
+its subject digest taken from the npm tarball (`--tarball`) and its tool listing
+extracted from the running server or read with `--tools-from`. The full admission
+demo, including a misdeclared server blocked on its capability gap, is in
+[`docs/demo.md`](docs/demo.md).
+
 ## Surfaces
 
 - **GitHub Action** ([`action/`](action/)): run `smithmark verify` against an
@@ -216,7 +252,7 @@ yet, on the record:
   verification (Fulcio, the Sigstore TUF trust root), transparency log inclusion
   proofs, and cryptographic verification of npm's own SLSA provenance are all
   accepted as inputs but reported as not attempted; they land, exercised live,
-  with the release workflow in M6.
+  with the first tagged release run, which is the maintainer's step.
 - **The CLI is not an agent artifact the capability model represents.** smithmark
   ships as a Go binary. The v0.1 capability manifest model defines only the
   `mcp-server` and `skill` kinds; a CLI or binary kind does not exist, so
