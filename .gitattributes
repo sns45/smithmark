@@ -1,0 +1,9 @@
+# Force LF line endings on checkout across every platform.
+#
+# Without this, Windows runners checked out the skill-bundle test fixtures
+# (references/notes.md, scripts/greet.sh, smithmark.yaml, and the golden JSON)
+# with CRLF, which changed their sha256 digests and therefore the canonical
+# bundle digest, failing every attest/verify/lint golden test on windows-latest
+# while macOS and Linux passed. Golden files must be byte-identical across OSes;
+# normalising to LF keeps the cross-OS determinism tests honest.
+* text=auto eol=lf

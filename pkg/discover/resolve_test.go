@@ -14,6 +14,7 @@ import (
 
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/memory"
 
 	"github.com/sns45/smithmark/pkg/compose"
@@ -75,39 +76,17 @@ func (f *fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}, nil
 }
 
-// --- poison OCI target ------------------------------------------------------
-
-// poisonTarget implements oras.ReadOnlyGraphTarget by failing the test on any
-// method call. It stands in for "this must never be touched" in tests that
-// assert a code path (such as --bundle mode) skips OCI backed attestation
-// discovery entirely, rather than merely happening not to find anything.
-type poisonTarget struct{ t *testing.T }
-
-func (p poisonTarget) Fetch(context.Context, ocispec.Descriptor) (io.ReadCloser, error) {
-	p.t.Fatal("poisonTarget.Fetch called; discovery should have been skipped entirely")
-	return nil, nil
-}
-func (p poisonTarget) Exists(context.Context, ocispec.Descriptor) (bool, error) {
-	p.t.Fatal("poisonTarget.Exists called; discovery should have been skipped entirely")
-	return false, nil
-}
-func (p poisonTarget) Resolve(context.Context, string) (ocispec.Descriptor, error) {
-	p.t.Fatal("poisonTarget.Resolve called; discovery should have been skipped entirely")
-	return ocispec.Descriptor{}, nil
-}
-func (p poisonTarget) Predecessors(context.Context, ocispec.Descriptor) ([]ocispec.Descriptor, error) {
-	p.t.Fatal("poisonTarget.Predecessors called; discovery should have been skipped entirely")
-	return nil, nil
-}
-
 // --- poison HTTP transport ---------------------------------------------------
 
 // poisonTransport implements http.RoundTripper by failing the test on any
 // call. It stands in for "this argument form must never touch the npm
 // registry" in tests whose argument never reaches the npm request path (a
 // local skill directory, an OCI reference, or an argument Resolve rejects
-// before any network call), pairing with poisonTarget's identical role for
-// the OCI target.
+// before any network call), pairing with the poison NewTarget factory
+// literal's identical role for OCI backed attestation discovery (see
+// TestResolveBundlePathWinsOverDiscovery: the factory itself fatals if
+// called, since with --bundle set discovery must never even ask for a
+// target, let alone call a method on one).
 type poisonTransport struct{ t *testing.T }
 
 func (p poisonTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -252,7 +231,7 @@ func TestResolveNPMArgFullRoundTrip(t *testing.T) {
 	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -308,7 +287,7 @@ func TestResolveNPMArgAbsentTagIsNotAnError(t *testing.T) {
 	got, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -372,6 +351,43 @@ func TestResolveNPMArgMalformedBaseFails(t *testing.T) {
 	assertCode(t, err, codes.DiscoveryFailed)
 }
 
+// TestDiscoverByTagScopesToPerArtifactRepository asserts that discoverByTag
+// computes the D3 per artifact repository via AttestationRef and passes that
+// exact value to opts.NewTarget, never the bare attestation base: the
+// headline fix for smithmark#4 (a shared, pre built target previously scoped
+// the OCI client to every artifact's tags at once, rather than to one
+// artifact's own repository). The attestations endpoint is served 404 and
+// nothing is pushed to the memory store, so the tag itself is simply absent;
+// the only thing under test is the repository string NewTarget receives.
+func TestDiscoverByTagScopesToPerArtifactRepository(t *testing.T) {
+	tr := npmTransport(t, http.StatusNotFound, nil)
+	var gotRepo string
+	store := memory.New()
+
+	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
+		Base:      testBase,
+		Transport: tr,
+		NewTarget: func(_ context.Context, repo string) (oras.ReadOnlyGraphTarget, error) {
+			gotRepo = repo
+			return store, nil
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// fixtureNPMName is the scoped package name
+	// "@modelcontextprotocol/server-filesystem"; AttestationRef's
+	// encodeNPMName strips the leading "@" and lowercases the remainder
+	// (already lowercase here), giving the encoded repository segment
+	// "modelcontextprotocol/server-filesystem" per decision D3. This is
+	// deliberately not fixtureNPMName verbatim: that string still carries the
+	// "@" scope marker, which is not a valid OCI repository path segment.
+	want := testBase + "/npm/modelcontextprotocol/server-filesystem"
+	if gotRepo != want {
+		t.Errorf("NewTarget scoped to %q, want the per artifact repository %q (not the bare base %q)", gotRepo, want, testBase)
+	}
+}
+
 // --- base resolution wiring (D3) --------------------------------------------
 
 // TestResolveSurfacesAttestationBaseUnknown asserts that when discovery needs
@@ -385,7 +401,7 @@ func TestResolveSurfacesAttestationBaseUnknown(t *testing.T) {
 
 	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
 		Transport: tr,
-		Target:    memory.New(),
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return memory.New(), nil },
 	}))
 	assertCode(t, err, codes.AttestationBaseUnknown)
 }
@@ -405,7 +421,7 @@ func TestResolveLocalDirBaseFromPackageJSON(t *testing.T) {
 	target := memory.New()
 	got, err := discover.Resolve(context.Background(), root, mustResolveOptions(t, discover.ResolveOptions{
 		Transport: poisonTransport{t: t}, // this argument form is a skill; npm must never be touched
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -464,7 +480,7 @@ func TestResolveLocalSkillDirectory(t *testing.T) {
 	got, err := discover.Resolve(context.Background(), skillFixtureRoot, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: poisonTransport{t: t}, // this argument form is a skill; npm must never be touched
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -508,7 +524,7 @@ func TestResolveLocalNPMSourcedDirectory(t *testing.T) {
 	got, err := discover.Resolve(context.Background(), root, mustResolveOptions(t, discover.ResolveOptions{
 		Base:      testBase,
 		Transport: tr,
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -542,7 +558,10 @@ func TestResolveBundlePathWinsOverDiscovery(t *testing.T) {
 		Base:       testBase,
 		BundlePath: bundlePath,
 		Transport:  tr,
-		Target:     poisonTarget{t: t},
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) {
+			t.Fatal("NewTarget called; discovery should have been skipped entirely")
+			return nil, nil
+		},
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -582,9 +601,9 @@ func TestResolveUnrecognizedArgumentFails(t *testing.T) {
 const emptyOCIManifestBytes = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`
 
 // TestResolveOCIRefUsesReferrers drives Resolve over an OCI reference
-// argument: it resolves the tag to a subject descriptor via opts.Target,
-// lists referrers, and collects the layers of any referrer whose
-// artifactType matches the sigstore bundle media type family (controller
+// argument: it resolves the tag to a subject descriptor via the target
+// opts.NewTarget produces, lists referrers, and collects the layers of any
+// referrer whose artifactType matches the sigstore bundle media type family (controller
 // resolution 7). The fixture is pushed with pkg/compose's own
 // AttachReferrer, proving the two Task 2.7 and Task 3.2 packages compose.
 func TestResolveOCIRefUsesReferrers(t *testing.T) {
@@ -608,7 +627,7 @@ func TestResolveOCIRefUsesReferrers(t *testing.T) {
 
 	got, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
 		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -624,6 +643,45 @@ func TestResolveOCIRefUsesReferrers(t *testing.T) {
 	}
 	if !bytes.Equal(got.Bundles[0], testSignedBundle().Bundle) {
 		t.Error("bundle bytes do not match the attached fixture")
+	}
+}
+
+// TestResolveOCIRefScopesToImageRepository asserts resolveOCIIdentity passes
+// the image's own repository, parsed from the oci reference argument via
+// registry.ParseReference, to opts.NewTarget, never a bare registry host or
+// an empty string. This is the headline fix for smithmark#4's OCI referrers
+// path (Task 1): the memory store below is tagged with the bare reference
+// "v1.0.0", so it only resolves the argument's tag if resolveOCIIdentity
+// requested a target scoped to exactly "registry.example.com/team/server".
+func TestResolveOCIRefScopesToImageRepository(t *testing.T) {
+	ctx := context.Background()
+	target := memory.New()
+	subjectBytes := []byte(emptyOCIManifestBytes)
+	subjectDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digestOf(subjectBytes),
+		Size:      int64(len(subjectBytes)),
+	}
+	if err := target.Push(ctx, subjectDesc, bytes.NewReader(subjectBytes)); err != nil {
+		t.Fatalf("pushing fabricated subject: %v", err)
+	}
+	if err := target.Tag(ctx, subjectDesc, "v1.0.0"); err != nil {
+		t.Fatalf("tagging fabricated subject: %v", err)
+	}
+
+	var gotRepo string
+	_, err := discover.Resolve(ctx, "registry.example.com/team/server:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
+		NewTarget: func(_ context.Context, repo string) (oras.ReadOnlyGraphTarget, error) {
+			gotRepo = repo
+			return target, nil
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if want := "registry.example.com/team/server"; gotRepo != want {
+		t.Errorf("NewTarget scoped to %q, want the image repository %q", gotRepo, want)
 	}
 }
 
@@ -660,7 +718,7 @@ func TestResolveOCIRefReferrerCapRejectsFlood(t *testing.T) {
 
 	_, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
 		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	assertCode(t, err, codes.DiscoveryFailed)
 }
@@ -685,7 +743,7 @@ func TestResolveOCIRefNoMatchingReferrers(t *testing.T) {
 
 	got, err := discover.Resolve(ctx, "registry.example.com/some/repo:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
 		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
-		Target:    target,
+		NewTarget: func(_ context.Context, _ string) (oras.ReadOnlyGraphTarget, error) { return target, nil },
 	}))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

@@ -29,8 +29,8 @@ import (
 
 // ResolveOptions carries every input Resolve needs beyond the CLI argument
 // itself. Base, BundlePath, and Registry are plain values a CLI flag surface
-// sets directly; Transport and Target are the two injection seams that keep
-// every network and registry access replaceable in tests (controller
+// sets directly; Transport and NewTarget are the two injection seams that
+// keep every network and registry access replaceable in tests (controller
 // resolution 2).
 type ResolveOptions struct {
 	// Base is the explicit --attestation-base flag value; it may be empty, in
@@ -39,14 +39,15 @@ type ResolveOptions struct {
 	Base string
 	// BundlePath is the explicit --bundle path. When set, it wins over all
 	// attestation discovery (controller resolution 3): Resolve reads this
-	// file directly for Discovered.Bundles and never queries opts.Target for
+	// file directly for Discovered.Bundles and never calls opts.NewTarget for
 	// attestation discovery, and never calls npm's provenance endpoint.
 	// Artifact identity (Discovered.Ref) is still resolved normally from arg,
 	// since a subject digest is needed for verification's digest match check
 	// regardless of where the bundle bytes came from; for an OCI reference
-	// argument specifically, that identity resolution step still queries
-	// opts.Target once, to resolve the reference to a subject descriptor,
-	// even though the referrers query that would otherwise follow never runs.
+	// argument specifically, that identity resolution step still calls
+	// opts.NewTarget once, to scope a target to the image repository and
+	// resolve the reference to a subject descriptor, even though the
+	// referrers query that would otherwise follow never runs.
 	BundlePath string
 	// Transport is the http.RoundTripper every npm registry request is sent
 	// through. A nil value means http.DefaultTransport (net/http's own
@@ -61,11 +62,14 @@ type ResolveOptions struct {
 	// (Task 3.6). Empty means the real registry.modelcontextprotocol.io,
 	// the same injection pattern Registry above already uses for npm.
 	RegistryAPI string
-	// Target is the OCI target Resolve queries for both the D3 tag mapped
-	// path (npm, pypi, skill) and the native referrers path (oci). A nil
-	// Target means OCI backed discovery is skipped with a note, not an error:
-	// not every caller needs it (a --bundle only verification, for example).
-	Target oras.ReadOnlyGraphTarget
+	// NewTarget constructs a read only OCI target scoped to a single
+	// repository. Discovery computes the per artifact repository, the D3
+	// <base>/<ecosystem>/<encoded-name> for the tag mapped path or the image
+	// reference's own repository for the referrers path, and calls NewTarget
+	// with it so the client queries the right path. A nil NewTarget means OCI
+	// backed discovery is skipped with a note, not an error, exactly as a nil
+	// target did before.
+	NewTarget func(ctx context.Context, repo string) (oras.ReadOnlyGraphTarget, error)
 }
 
 // Discovered is what Resolve produces: the resolved artifact reference (with
@@ -101,15 +105,17 @@ const (
 	// skill, or an mcp-server sourced from npm, do); identity is declaration
 	// only.
 	NoteNoDigestForSource = "NO_DIGEST_FOR_SOURCE"
-	// NoteNoOCITarget reports that opts.Target was nil, so the D3 tag mapped
-	// fetch was skipped.
+	// NoteNoOCITarget reports that opts.NewTarget was nil, so the D3 tag
+	// mapped fetch was skipped.
 	NoteNoOCITarget = "NO_OCI_TARGET"
 	// NoteNoAttestationTag reports that the D3 mapped tag was resolved but
-	// does not exist in opts.Target: an absent tag, not an error (U3 assigns
-	// that meaning to verification's ATTESTATION_MISSING check).
+	// does not exist in the target opts.NewTarget produced: an absent tag,
+	// not an error (U3 assigns that meaning to verification's
+	// ATTESTATION_MISSING check).
 	NoteNoAttestationTag = "NO_ATTESTATION_TAG"
-	// NoteAttestationTag reports that the D3 mapped tag was found in
-	// opts.Target, with the candidate bundle count that yielded.
+	// NoteAttestationTag reports that the D3 mapped tag was found in the
+	// target opts.NewTarget produced, with the candidate bundle count that
+	// yielded.
 	NoteAttestationTag = "ATTESTATION_TAG_FOUND"
 	// NoteLocalSkill reports that a local directory argument resolved to a
 	// skill, with its bundle digest recomputed via the walker.
@@ -131,7 +137,8 @@ const (
 	// attestations, but none of them carry the SLSA provenance predicate.
 	NoteProvenanceNoMatch = "PROVENANCE_NO_MATCH"
 	// NoteOCIResolved reports that an OCI reference argument resolved to a
-	// subject descriptor via opts.Target.
+	// subject descriptor via the target opts.NewTarget scoped to the image
+	// repository.
 	NoteOCIResolved = "OCI_RESOLVED"
 	// NoteReferrers reports the outcome of the OCI referrers query: how many
 	// referrers were found and how many of them matched the sigstore bundle
@@ -151,20 +158,22 @@ func notef(prefix, format string, args ...any) string {
 // runs: the resolved ArtifactRef, the local directory it was resolved from
 // (empty for non local args, so ResolveAttestationBase's artifactRoot
 // parameter is correctly empty per D3), and, only for the OCI reference
-// argument form, the already resolved subject descriptor the referrers query
-// needs.
+// argument form, the already resolved subject descriptor and the target
+// already scoped to the image repository the referrers query needs.
 type identity struct {
 	ref          manifest.ArtifactRef
 	artifactRoot string
 	ociSubject   *ocispec.Descriptor
+	ociTarget    oras.ReadOnlyGraphTarget
 	notes        []string
 }
 
 // Resolve turns arg into a Discovered, dispatching on its shape: an existing
 // local directory (kind and identity from its smithmark.yaml declaration), an
-// OCI reference (referrers API against opts.Target), or an npm
-// "name@version" argument (packument resolution). Registry entry resolution
-// (mcp-registry: prefixed names) is Task 3.6's job and is not handled here.
+// OCI reference (referrers API against the target opts.NewTarget scopes to
+// the image repository), or an npm "name@version" argument (packument
+// resolution). Registry entry resolution (mcp-registry: prefixed names) is
+// Task 3.6's job and is not handled here.
 //
 // Argument dispatch happens before opts.BundlePath is consulted: identity
 // resolution is not "discovery" in spec section 6's sense (it never queries
@@ -191,7 +200,7 @@ func Resolve(ctx context.Context, arg string, opts ResolveOptions) (*Discovered,
 	}
 
 	if ident.ociSubject != nil {
-		bundles, notes, err := discoverReferrers(ctx, opts.Target, *ident.ociSubject)
+		bundles, notes, err := discoverReferrers(ctx, ident.ociTarget, *ident.ociSubject)
 		if err != nil {
 			return nil, err
 		}
@@ -227,11 +236,11 @@ func resolveIdentity(ctx context.Context, arg string, opts ResolveOptions) (*ide
 		return resolveLocalIdentity(ctx, arg, opts)
 	}
 	if looksLikeOCIRef(arg) {
-		ref, subject, notes, err := resolveOCIIdentity(ctx, arg, opts)
+		ref, subject, target, notes, err := resolveOCIIdentity(ctx, arg, opts)
 		if err != nil {
 			return nil, err
 		}
-		return &identity{ref: ref, ociSubject: &subject, notes: notes}, nil
+		return &identity{ref: ref, ociSubject: &subject, ociTarget: target, notes: notes}, nil
 	}
 	name, version, ok := parseNPMArg(arg)
 	if !ok {
@@ -333,25 +342,26 @@ func parseNPMArg(arg string) (name, version string, ok bool) {
 }
 
 // discoverByTag maps ref onto its D3 deterministic (repository, tag) pair and
-// fetches that tag from opts.Target. It is shared by every argument form that
-// uses the tag mapped path: the pure npm argument, and a local directory
-// resolving to a skill or an npm sourced mcp-server.
+// fetches that tag from the target opts.NewTarget produces. It is shared by
+// every argument form that uses the tag mapped path: the pure npm argument,
+// and a local directory resolving to a skill or an npm sourced mcp-server.
 //
-// Only two outcomes are notes, never errors: no OCI target configured, and an
-// absent tag (errdef.ErrNotFound), both of which mean "nothing found," not
-// "something went wrong" (U3 assigns failure meaning to verification's
-// ATTESTATION_MISSING check, not to discovery). Every ref this function is
-// ever called with already carries a digest (the len(ref.Digest) == 0 check
-// above short circuits first, before this point, for the sources that have no
-// canonical attestation home at all: a local sourced or mcp-registry sourced
-// mcp-server never reaches here with a digest to map). That means
-// AttestationRef can only fail here on an operational grammar or name
-// problem, such as a malformed attestation base or a name segment that does
-// not fit the OCI repository path grammar, never on "this source has no
+// Only two outcomes are notes, never errors: no OCI target factory
+// configured, and an absent tag (errdef.ErrNotFound), both of which mean
+// "nothing found," not "something went wrong" (U3 assigns failure meaning to
+// verification's ATTESTATION_MISSING check, not to discovery). Every ref this
+// function is ever called with already carries a digest (the len(ref.Digest)
+// == 0 check above short circuits first, before this point, for the sources
+// that have no canonical attestation home at all: a local sourced or
+// mcp-registry sourced mcp-server never reaches here with a digest to map).
+// That means AttestationRef can only fail here on an operational grammar or
+// name problem, such as a malformed attestation base or a name segment that
+// does not fit the OCI repository path grammar, never on "this source has no
 // mapping": every such failure is therefore DISCOVERY_FAILED, wrapping the
 // cause, not a silently swallowed note. ATTESTATION_BASE_UNKNOWN from
 // ResolveAttestationBase surfaces verbatim (controller resolution 4); any
-// other, unexpected opts.Target error is also DISCOVERY_FAILED.
+// other, unexpected error from opts.NewTarget or the target it produces is
+// also DISCOVERY_FAILED.
 func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.ArtifactRef, artifactRoot string) ([][]byte, []string, error) {
 	if len(ref.Digest) == 0 {
 		return nil, []string{notef(NoteNoDigest, "no digest resolved for this artifact; skipping OCI backed attestation discovery")}, nil
@@ -362,16 +372,20 @@ func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.Artifa
 		return nil, nil, err
 	}
 
-	_, tag, err := AttestationRef(base, ref)
+	repo, tag, err := AttestationRef(base, ref)
 	if err != nil {
 		return nil, nil, codes.E(codes.DiscoveryFailed, "mapping attestation ref for %s %q: %v", ref.Kind, ref.Name, err)
 	}
 
-	if opts.Target == nil {
-		return nil, []string{notef(NoteNoOCITarget, "no OCI target configured; skipping tag based attestation discovery")}, nil
+	if opts.NewTarget == nil {
+		return nil, []string{notef(NoteNoOCITarget, "no OCI target factory configured; skipping tag based attestation discovery")}, nil
+	}
+	target, err := opts.NewTarget(ctx, repo)
+	if err != nil {
+		return nil, nil, codes.E(codes.DiscoveryFailed, "scoping attestation target to %q: %v", repo, err)
 	}
 
-	desc, err := opts.Target.Resolve(ctx, tag)
+	desc, err := target.Resolve(ctx, tag)
 	if err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
 			return nil, []string{notef(NoteNoAttestationTag, "no attestation tag %s found", tag)}, nil
@@ -379,7 +393,7 @@ func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.Artifa
 		return nil, nil, codes.E(codes.DiscoveryFailed, "resolving attestation tag %s: %v", tag, err)
 	}
 
-	bundles, err := fetchManifestLayers(ctx, opts.Target, desc)
+	bundles, err := fetchManifestLayers(ctx, target, desc)
 	if err != nil {
 		return nil, nil, err
 	}
