@@ -646,6 +646,45 @@ func TestResolveOCIRefUsesReferrers(t *testing.T) {
 	}
 }
 
+// TestResolveOCIRefScopesToImageRepository asserts resolveOCIIdentity passes
+// the image's own repository, parsed from the oci reference argument via
+// registry.ParseReference, to opts.NewTarget, never a bare registry host or
+// an empty string. This is the headline fix for smithmark#4's OCI referrers
+// path (Task 1): the memory store below is tagged with the bare reference
+// "v1.0.0", so it only resolves the argument's tag if resolveOCIIdentity
+// requested a target scoped to exactly "registry.example.com/team/server".
+func TestResolveOCIRefScopesToImageRepository(t *testing.T) {
+	ctx := context.Background()
+	target := memory.New()
+	subjectBytes := []byte(emptyOCIManifestBytes)
+	subjectDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digestOf(subjectBytes),
+		Size:      int64(len(subjectBytes)),
+	}
+	if err := target.Push(ctx, subjectDesc, bytes.NewReader(subjectBytes)); err != nil {
+		t.Fatalf("pushing fabricated subject: %v", err)
+	}
+	if err := target.Tag(ctx, subjectDesc, "v1.0.0"); err != nil {
+		t.Fatalf("tagging fabricated subject: %v", err)
+	}
+
+	var gotRepo string
+	_, err := discover.Resolve(ctx, "registry.example.com/team/server:v1.0.0", mustResolveOptions(t, discover.ResolveOptions{
+		Transport: poisonTransport{t: t}, // an OCI reference must never reach the npm registry
+		NewTarget: func(_ context.Context, repo string) (oras.ReadOnlyGraphTarget, error) {
+			gotRepo = repo
+			return target, nil
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if want := "registry.example.com/team/server"; gotRepo != want {
+		t.Errorf("NewTarget scoped to %q, want the image repository %q", gotRepo, want)
+	}
+}
+
 // TestResolveOCIRefReferrerCapRejectsFlood asserts discoverReferrers fails
 // closed when a subject carries more matching sigstore bundle referrers than
 // the candidate cap (16), rather than silently narrowing to a subset an
