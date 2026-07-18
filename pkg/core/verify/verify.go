@@ -466,13 +466,13 @@ func evalProvenance(in Input, set func(code string, passed, informational bool, 
 		}
 	}
 	set(codes.NPMProvenanceVerified, false, true,
-		"full verification requires the Sigstore trust root, exercised live in M6")
+		"full verification requires the Sigstore trust root, a later addition not performed in v0.1")
 }
 
 // rekorAbsentDetail explains a false REKOR_INCLUSION_VALID for a key based
 // offline bundle. It is a legitimate absence, not a failure that should worry a
 // caller, which is why the check is informational.
-const rekorAbsentDetail = "no transparency log inclusion entry; key based offline bundles carry none, and verifying an inclusion proof offline needs the log key from the Sigstore trust root (M6)"
+const rekorAbsentDetail = "no transparency log inclusion entry; key based offline bundles carry none, and verifying an inclusion proof offline needs the log key from the Sigstore trust root, a later addition"
 
 // missingAttestationChecks builds the check set for the no bundle case: the
 // presence check fails and every other check is present but not evaluated, so a
