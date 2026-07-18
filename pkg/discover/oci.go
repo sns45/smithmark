@@ -86,21 +86,40 @@ func ociReference(arg string) string {
 	return arg
 }
 
-// resolveOCIIdentity resolves arg's tag or digest reference against
-// opts.Target and builds the resulting ArtifactRef: kind mcp-server (spec
-// section 6's OCI referrers row is the OCI distributed MCP server case),
-// source oci, name arg verbatim (no better identity is available from a bare
-// reference), and a digest set carrying the resolved descriptor's own
-// algorithm and hex encoded digest.
-func resolveOCIIdentity(ctx context.Context, arg string, opts ResolveOptions) (manifest.ArtifactRef, ocispec.Descriptor, []string, error) {
-	if opts.Target == nil {
-		return manifest.ArtifactRef{}, ocispec.Descriptor{}, nil,
-			codes.E(codes.DiscoveryFailed, "oci reference %q given but no OCI target was configured", arg)
+// resolveOCIIdentity resolves arg's tag or digest reference against a target
+// opts.NewTarget scopes to the image's own repository and builds the
+// resulting ArtifactRef: kind mcp-server (spec section 6's OCI referrers row
+// is the OCI distributed MCP server case), source oci, name arg verbatim (no
+// better identity is available from a bare reference), and a digest set
+// carrying the resolved descriptor's own algorithm and hex encoded digest.
+// The scoped target is returned alongside so the caller can reuse it for the
+// referrers query that follows, rather than scoping a second target for the
+// same repository.
+func resolveOCIIdentity(ctx context.Context, arg string, opts ResolveOptions) (manifest.ArtifactRef, ocispec.Descriptor, oras.ReadOnlyGraphTarget, []string, error) {
+	if opts.NewTarget == nil {
+		return manifest.ArtifactRef{}, ocispec.Descriptor{}, nil, nil,
+			codes.E(codes.DiscoveryFailed, "oci reference %q given but no OCI target factory was configured", arg)
 	}
-	reference := ociReference(arg)
-	desc, err := opts.Target.Resolve(ctx, reference)
+	// Parses arg in full, not through ociReference: registry.ParseReference
+	// needs the repository path alongside the tag or digest to produce
+	// parsed.Registry and parsed.Repository, both of which the per artifact
+	// repository scoping below depends on; ociReference's own trailing tag or
+	// digest extraction is for a Target already scoped to one repository,
+	// which is no longer this function's shape.
+	parsed, err := registry.ParseReference(arg)
 	if err != nil {
-		return manifest.ArtifactRef{}, ocispec.Descriptor{}, nil,
+		return manifest.ArtifactRef{}, ocispec.Descriptor{}, nil, nil,
+			codes.E(codes.DiscoveryFailed, "parsing oci reference %q: %v", arg, err)
+	}
+	repo := parsed.Registry + "/" + parsed.Repository
+	target, err := opts.NewTarget(ctx, repo)
+	if err != nil {
+		return manifest.ArtifactRef{}, ocispec.Descriptor{}, nil, nil,
+			codes.E(codes.DiscoveryFailed, "scoping oci target to %q: %v", repo, err)
+	}
+	desc, err := target.Resolve(ctx, parsed.Reference)
+	if err != nil {
+		return manifest.ArtifactRef{}, ocispec.Descriptor{}, nil, nil,
 			codes.E(codes.DiscoveryFailed, "resolving oci reference %q: %v", arg, err)
 	}
 
@@ -110,8 +129,8 @@ func resolveOCIIdentity(ctx context.Context, arg string, opts ResolveOptions) (m
 		Source: manifest.SourceOCI,
 		Digest: manifest.DigestSet{desc.Digest.Algorithm().String(): desc.Digest.Encoded()},
 	}
-	notes := []string{notef(NoteOCIResolved, "resolved oci reference %q to digest %s via the injected target", arg, desc.Digest)}
-	return ref, desc, notes, nil
+	notes := []string{notef(NoteOCIResolved, "resolved oci reference %q to digest %s via the scoped target", arg, desc.Digest)}
+	return ref, desc, target, notes, nil
 }
 
 // discoverReferrers lists subject's referrers in target (the same

@@ -178,11 +178,12 @@ func writeStderrNotes(w io.Writer, jsonMode bool, notes []string) {
 // discoverForVerification builds discover.ResolveOptions from the shared
 // attestation discovery flags and resolves arg through discover.Resolve. An
 // explicit bundlePath short circuits attestation discovery entirely (no OCI
-// target is built, matching discover.Resolve's own BundlePath contract);
-// every other case constructs a read only OCI target via d.ReadTarget first,
-// since discovery needs one to look up the D3 deterministic attestation tag.
-// Both verify and registry check's npm continuation (Task 3.6) share this, so
-// the discovery wiring is never duplicated between the two commands.
+// target factory is set, matching discover.Resolve's own BundlePath
+// contract); every other case passes d.ReadTarget straight through, since
+// discovery itself now computes the per artifact repository and calls the
+// factory with it. Both verify and registry check's npm continuation (Task
+// 3.6) share this, so the discovery wiring is never duplicated between the
+// two commands.
 func discoverForVerification(ctx context.Context, d *deps, arg, attestationBase, bundlePath string) (*discover.Discovered, error) {
 	opts := discover.ResolveOptions{
 		Base:       attestationBase,
@@ -190,18 +191,13 @@ func discoverForVerification(ctx context.Context, d *deps, arg, attestationBase,
 		Transport:  d.Transport,
 		Registry:   d.Registry,
 	}
-	// Attestation discovery needs a read only OCI target; an explicit --bundle
-	// short circuits discovery, so a target is constructed only when discovering.
-	// The repo argument is a best effort hint the production factory scopes its
-	// client with; discovery itself keys the lookup off the deterministic
-	// attestation tag, and live registry scoping is refined when M6 wires
-	// verification against a real registry.
+	// Attestation discovery needs a factory that scopes a read only OCI target
+	// to the per artifact repository discovery computes. An explicit --bundle
+	// short circuits discovery, so the factory is only consulted when
+	// discovering. Base resolution and repository scoping both live inside
+	// discovery now, so the CLI passes the factory straight through.
 	if bundlePath == "" {
-		target, err := d.ReadTarget(ctx, attestationBase)
-		if err != nil {
-			return nil, fmt.Errorf("resolving OCI target for discovery: %w", err)
-		}
-		opts.Target = target
+		opts.NewTarget = d.ReadTarget
 	}
 	return discover.Resolve(ctx, arg, opts)
 }
