@@ -302,7 +302,7 @@ verification core, offline, over the real signed bundles (section 2), with the
 undeclared capability itself named live by the CLI (section 1). The runtime
 surface, the Claude Code hook, demonstrates the end to end explainable deny and
 allow for a signed skill, offline (section 3). The one thing not yet shown is
-that same clean capability-gap block of a signed MCP server driven all the way
+that same clean capability gap block of a signed MCP server driven all the way
 through the hook offline: that awaits the M6 pinned bundle or trust root verify
 path, because verify resolves an mcp-server digest only over the network today
 (section 4). smithmark produces the evidence; assayward consumes it; the hook is

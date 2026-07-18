@@ -28,7 +28,7 @@ Amendment 2026-07-17: M3 discovery ships the SBOM reference presence check only 
 
 **Follow up**: file a gh issue on `sns45/forgeseal` requesting an exported `pkg/sbom` facade over `internal/sbom.Generator` plus lockfile detection. File it when the adapter lands in M2. Filed: https://github.com/sns45/forgeseal/issues/26
 
-## D3: Deterministic OCI attestation ref scheme (spec §6, §13 Q3) — NORMATIVE, feeds the registry RFC
+## D3: Deterministic OCI attestation ref scheme (spec §6, §13 Q3), NORMATIVE, feeds the registry RFC
 
 For an artifact with source ecosystem `E`, name `N`, canonical digest `D`:
 
@@ -49,7 +49,7 @@ Amendment 2026-07-16: digest values must be exact length for the mapping (npm sh
 
 Amendment 2026-07-17 (live OCI scoping deferred): M3 exercises attestation discovery against an injected oras target with an in memory store; the live registry client is not yet scoped to the per artifact repository `AttestationRef` computes. `discoverByTag` keeps only the tag half of the `(repository, tag)` pair, and the CLI builds its read target from the raw `--attestation-base` flag rather than resolving it through `ResolveAttestationBase`. When the base resolves to empty, the production read target factory now fails closed with a coded `DISCOVERY_FAILED` naming the limitation instead of an uncoded `INTERNAL_ERROR`. No memory store test can catch the scoping gap, so the full live wiring lands with the M6 dogfood, the first live consumer. Tracked: https://github.com/sns45/smithmark/issues/4
 
-## D4: `verify --strict` semantics and exit codes (spec §5, §13 Q4) — exit codes are API
+## D4: `verify --strict` semantics and exit codes (spec §5, §13 Q4): exit codes are API
 
 Default is pure verify: lint findings never fail the command. `--strict` additionally fails on findings whose code matches `UNDECLARED_*`, and nothing else.
 
@@ -76,7 +76,7 @@ Amendment 2026-07-17 (M4, lint detector coverage and the hook demo fixture): the
 
 v0.1 attests and verifies artifact distributed servers only. Two guards: `MCPSurface.Transport` still records all declared transports (a stdio artifact may also serve http; declaring it is not an error), and `registry check` reports informational `HOSTED_ENDPOINT_UNSUPPORTED` on remote only registry entries instead of erroring. Phase 2 ties hosted endpoint attestation to svidmint identity.
 
-## D6: `agent-capability/v1` predicate schema (spec §2.3, §13 Q6) — ships verbatim in the TC54 draft
+## D6: `agent-capability/v1` predicate schema (spec §2.3, §13 Q6): ships verbatim in the TC54 draft
 
 Field level shape approved 2026-07-16. Envelope: in-toto Statement v1, predicate type `https://in8.sh/attestation/agent-capability/v1`. Predicate fields: `schemaVersion` (semver), `artifact` {kind, name, version, source}, exactly one of `mcp` {transports, tools, resources, prompts} or `skill` {entryDigest, scripts, invokesTools} matching `artifact.kind`, `capabilities` (all five keys required), `dependencies` {sbomDigest, sbomFormat, locator} (optional block), `generatedAt`, `generator` {name, version}.
 
@@ -100,7 +100,7 @@ Binding rules:
 
 Makers declare capabilities and surfaces in `smithmark.yaml` at the artifact root; strict parsed; schema mirrors the predicate's `capabilities` and surface blocks. `manifest init` scaffolds it. Rejected: `package.json` embedding (skills have no `package.json`); JSON only (hostile to hand authoring). The `package.json` `smithmark` key carries only `attestationBase` discovery metadata (D3), never capability declarations.
 
-## U2: Tool listing extraction — attest may execute, verify must not
+## U2: Tool listing extraction, attest may execute, verify must not
 
 `attest` launches the stdio server locally and issues `tools/list`; the maker is running their own code, and this yields exact tool names and input schema digests. `--tools-from <json>` is the escape hatch for CI that cannot launch the server. `verify` and `lint` never execute the artifact; lint is static only. This asymmetry is a documented security posture.
 
@@ -130,7 +130,7 @@ in-toto DigestSet style throughout: `{"<alg>": "<hex>"}`. npm `sha512-<base64>` 
 
 USPTO and third party Homebrew tap sweeps remain the maintainer's manual gates before the first public commit; local development proceeds under the smithmark name. Fallbacks per spec: `touchmark`, `provenmark`, `tangmark`.
 
-## U8: M6 dogfood — the D1 capability taxonomy meets real first party servers (2026-07-17)
+## U8: M6 dogfood, the D1 capability taxonomy meets real first party servers (2026-07-17)
 
 Task 6.1 authored honest `smithmark.yaml` declarations for two real MCP servers (better-call-claude 3.1.1 and dear-claude 1.1.0) by reading their vendored `src`, attested them with the throwaway dogfood key, and verified they pass. This is where D1 (the capability taxonomy) and D6 (the manifest schema) first met real product code rather than fixtures. Both real servers validate and lint clean; the only lint finding across all three committed fixtures is the intended `UNDECLARED_NETWORK_EGRESS` on the deliberately misdeclared server. The friction the taxonomy surfaced, captured honestly for the record:
 
