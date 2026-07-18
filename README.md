@@ -38,7 +38,7 @@ verification core, and the runtime end to end explainable deny and allow through
 the Claude Code hook for a signed skill. The same clean capability gap block of
 an MCP server driven all the way through the hook offline is honestly not there
 yet: verify resolves an mcp-server digest only over the network today, so it
-awaits the M6 pinned bundle or trust root verify path.
+awaits a future pinned bundle or trust root verify path.
 
 ## The trust as code family
 
@@ -162,7 +162,7 @@ smithmark manifest init            # scaffold a smithmark.yaml declaration
   behind `smithmark verify` and returns an explainable allow or deny. Its offline
   suite demonstrates the end to end block, naming the undeclared capability, and
   the allow for a signed skill; the same clean capability gap block of a
-  misdeclared MCP server through the hook offline awaits the M6 verify path, since
+  misdeclared MCP server through the hook offline awaits a future pinned bundle verify path, since
   verify resolves an mcp-server digest only over the network today (see
   [`docs/demo.md`](docs/demo.md)). One shim, well documented; the pattern
   generalizes, the repo does not chase every runtime.

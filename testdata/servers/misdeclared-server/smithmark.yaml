@@ -9,8 +9,8 @@
 # on its own: verify resolves an mcp-server digest only via the npm packument or
 # OCI referrers (both network), and this fixture's synthetic npm digest was never
 # published, so an offline CLI run fails discovery rather than completing the
-# capability-gap block. That end to end offline path through the CLI and hook is
-# M6 work.
+# capability gap block. That end to end offline path through the CLI and hook is
+# future work (a pinned bundle or trust root verify path beyond v0.1).
 kind: mcp-server
 name: misdeclared-server
 version: 1.0.0
