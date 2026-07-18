@@ -1,0 +1,85 @@
+# assayward-dogfood-policy.yaml
+#
+# smithmark's own release gate policy, mirroring forgeseal's
+# assayward-dogfood-policy.yaml pattern (spec section 11). Applied by
+# .github/workflows/assayward-gate.yml on every published release.
+#
+# smithmark never decides here (spec section 1.3). This policy is evaluated
+# by assayward, a separate tool, against the evidence the release workflow
+# produces (forgeseal's SBOM and SLSA provenance for smithmark itself, plus
+# the keyless Sigstore signature over the release binaries).
+#
+# Validated against the pinned assayward v0.1.0 CLI with:
+#   go run github.com/sns45/assayward/cmd/assayward@v0.1.0 \
+#     policy validate assayward-dogfood-policy.yaml
+#
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: smithmark-dogfood
+  version: v0.1.0
+spec:
+  mode: enforce
+
+  signature:
+    # required is false here, a deliberately scoped, not an overstated,
+    # position. The release checksums carry a real keyless Sigstore
+    # signature (forgeseal sign in release.yml), but assayward-gate.yml
+    # evaluates evidence through assayward's --forgeseal-output ingestion
+    # path, and that signature is not fed through it: forgeseal-output only
+    # assembles the dependency SBOM and SLSA provenance for smithmark, not
+    # the release checksums' own signature. Separately, assayward's engine
+    # (engine.go) runs its signature verifier over every attestation
+    # including the staged SLSA bundle, and the native verifier
+    # (verify/sigstore_native.go) does have a real keyless path: it falls
+    # back to the Sigstore public good live TUF root when no
+    # --sigstore-trust-root is injected and verifies the Fulcio certificate
+    # chain plus Rekor transparency log inclusion. Read from source, this
+    # path plausibly succeeds against the genuinely keyless signed SLSA
+    # bundle release.yml produces in CI, but it is unconfirmed: the only
+    # local test run against a keyed, offline signed bundle with no
+    # --signature-ca supplied, which correctly fails through a different
+    # code path (VerifyKeyedBundle) than the keyless one described above,
+    # and does not establish that the keyless path fails too. required
+    # stays false until the first live tagged run confirms the staged SLSA
+    # bundle actually verifies keyless through --forgeseal-output, at which
+    # point this flips back to true. The keyless block below is left in
+    # place; it is harmless while required is false and only bites once a
+    # verified identity is present and does not match.
+    required: false
+    keyless:
+      issuer: "https://token.actions.githubusercontent.com"
+      identityPattern: "https://github.com/sns45/smithmark/*"
+    rekor:
+      # Left false for the same reason signature.required is false above:
+      # unconfirmed until the first live tagged run.
+      required: false
+
+  slsa:
+    # forgeseal's provenance heuristic (deriveBuildLevel in assayward's
+    # verify/slsa.go) reports level 3 when builder.id is a nonempty https
+    # URI and buildType is set, which is what a GitHub Actions run produces.
+    minLevel: 3
+    allowedBuilders:
+      - "https://github.com/sns45/*"
+
+  vex:
+    # The gate stages an empty statements OpenVEX stub today (the release
+    # pipeline does not run forgeseal's --vex-triage), so this check passes
+    # vacuously (no affected CVEs found because none were looked up), not
+    # from a real vulnerability triage. Wiring --vex-triage into the
+    # release workflow, so this check reflects real OSV.dev data, is future
+    # work, not this task's claim.
+    maxUnmitigatedSeverity: high
+
+  sbom:
+    # forgeseal produces the dependency SBOM for smithmark itself; smithmark
+    # composes forgeseal rather than duplicating SBOM generation.
+    required: true
+
+  identity:
+    # No SPIFFE/SVID infrastructure runs in smithmark's release workflow
+    # (unlike forgeseal's optional svidmint step); the keyless Sigstore
+    # signature above is the workload identity smithmark's release gate
+    # relies on.
+    required: false

@@ -1,0 +1,190 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.sns45/dear-claude",
+  "description": "Spawn Claude Code instances from 6 platforms when 'Dear Claude' is mentioned.",
+  "repository": {
+    "url": "https://github.com/sns45/dear-claude",
+    "source": "github"
+  },
+  "version": "1.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "dear-claude",
+      "version": "1.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "DEAR_CLAUDE_PORT",
+          "description": "HTTP server port for webhooks (default: 3334)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TAILSCALE_HOSTNAME",
+          "description": "Override Tailscale hostname for webhook URLs (auto-detected if not set)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "GITHUB_CLIENT_ID",
+          "description": "GitHub OAuth App or GitHub App client ID",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "GITHUB_CLIENT_SECRET",
+          "description": "GitHub OAuth App or GitHub App client secret",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "GITHUB_WEBHOOK_SECRET",
+          "description": "GitHub webhook signature secret",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "GITHUB_ACCESS_TOKEN",
+          "description": "GitHub personal access token (alternative to OAuth)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "GITHUB_APP_ID",
+          "description": "GitHub App ID (for installation-based auth)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "GITHUB_APP_PRIVATE_KEY_PATH",
+          "description": "Path to GitHub App private key PEM file",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "LINEAR_CLIENT_ID",
+          "description": "Linear OAuth application client ID",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "LINEAR_CLIENT_SECRET",
+          "description": "Linear OAuth application client secret",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "LINEAR_WEBHOOK_SECRET",
+          "description": "Linear webhook signing secret",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "LINEAR_ACCESS_TOKEN",
+          "description": "Linear personal API key (alternative to OAuth)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "JIRA_DOMAIN",
+          "description": "Jira Cloud domain (e.g. 'mycompany' for mycompany.atlassian.net)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "JIRA_USER_EMAIL",
+          "description": "Jira account email for API authentication",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "JIRA_API_TOKEN",
+          "description": "Jira API token from id.atlassian.com",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "JIRA_WEBHOOK_SECRET",
+          "description": "Shared secret for Jira webhook URL validation",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "GITLAB_ACCESS_TOKEN",
+          "description": "GitLab personal or project access token",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "GITLAB_WEBHOOK_SECRET",
+          "description": "GitLab webhook secret token",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NOTION_CLIENT_ID",
+          "description": "Notion OAuth integration client ID",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "NOTION_CLIENT_SECRET",
+          "description": "Notion OAuth integration client secret",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NOTION_ACCESS_TOKEN",
+          "description": "Notion internal integration token (alternative to OAuth)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NOTION_WEBHOOK_SECRET",
+          "description": "Notion webhook verification secret",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "OBSIDIAN_VAULT_PATH",
+          "description": "Absolute path to Obsidian vault directory for file watching",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "GIPHY_API_KEY",
+          "description": "Giphy API key for embedding GIF reactions in responses",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

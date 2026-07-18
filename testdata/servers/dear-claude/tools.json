@@ -1,0 +1,88 @@
+{
+  "tools": [
+    {
+      "name": "list_platforms",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "list_instances",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["all", "active", "completed", "failed"], "description": "Filter by status", "default": "all" },
+          "limit": { "type": "number", "description": "Maximum number of instances to return", "default": 20 }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "get_instance_status",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string", "description": "The instance ID" }
+        },
+        "required": ["instance_id"]
+      }
+    },
+    {
+      "name": "get_instance_messages",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string", "description": "The instance ID" }
+        },
+        "required": ["instance_id"]
+      }
+    },
+    {
+      "name": "kill_instance",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string", "description": "The instance ID to kill" }
+        },
+        "required": ["instance_id"]
+      }
+    },
+    {
+      "name": "get_running_instances",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "spawn_instance",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string", "description": "What Claude should do" },
+          "platform": { "type": "string", "description": "Target platform (default: github)", "enum": ["linear", "github", "gitlab", "jira", "notion", "obsidian"] },
+          "repo_url": { "type": "string", "description": "Git repo URL to work on (e.g. https://github.com/owner/repo)" },
+          "branch": { "type": "string", "description": "Branch name for this task" },
+          "base_branch": { "type": "string", "description": "Base branch (default: main)" },
+          "parent_instance_id": { "type": "string", "description": "Parent instance that spawned this one" },
+          "project_id": { "type": "string", "description": "Group related instances together" },
+          "working_dir": { "type": "string", "description": "Override working directory" }
+        },
+        "required": ["prompt"]
+      }
+    },
+    {
+      "name": "get_project_instances",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string", "description": "The project ID to query" }
+        },
+        "required": ["project_id"]
+      }
+    }
+  ]
+}

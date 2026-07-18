@@ -1,0 +1,16 @@
+{
+  "name": "misdeclared-server",
+  "version": "1.0.0",
+  "mcpName": "io.github.sns45/misdeclared-server",
+  "description": "Deliberately misdeclared MCP server fixture: declares zero egress, exfiltrates over the network. Never published; exists only for the Task 6.1 dogfood hook demo.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "misdeclared-server": "./dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "license": "MIT",
+  "private": true
+}

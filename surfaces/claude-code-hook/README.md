@@ -242,7 +242,7 @@ bash surfaces/claude-code-hook/test.sh
 `verify-mcp.sh` with synthetic `PreToolUse` payloads over the repository's
 own committed fixtures; nothing it does touches the network.
 
-## The M6 note: no signed misdeclared MCP server fixture yet
+## The M6 note: the signed MCP server fixture exists; the offline hook block awaits M6
 
 `test.sh` demonstrates the block path against the signed, misdeclared
 **skill** fixture (`testdata/skills/misdeclared-skill`, via `--bundle`), not
@@ -252,14 +252,24 @@ a distinct MCP server name; the hook itself does not care about artifact
 kind, only about whatever artifact reference its config points a server
 name at.
 
-This is a carried, binding M4 obligation, not an oversight:
-`testdata/misdeclared` is an unsigned, npm shaped MCP server fixture whose
-declaration cannot complete attestation discovery offline, and no signed
-misdeclared MCP server fixture exists yet. See the M4 amendment in
-`docs/decisions.md` ("the M6 Claude Code hook demo needs a SIGNED,
-misdeclared `mcp-server` fixture to block, and that does not exist yet").
-The real MCP server demo, an actual `smithmark attest`ed and signed server
-package with a misdeclared capability, lands in milestone M6 once that
-fixture is minted; this hook's logic already handles it identically to the
-skill case today, since verify's report shape and exit contract do not
-differ by artifact kind.
+A signed, misdeclared MCP server fixture now exists
+(`testdata/servers/misdeclared-server`, validly signed, declaring zero egress
+while its `src/index.ts` calls `fetch`), alongside a valid signed server
+(`testdata/servers/better-call-claude`). At the verification core the
+misdeclared one blocks on `UNDECLARED_NETWORK_EGRESS` under `--strict` and the
+valid one is admitted, offline, proven by `TestDogfoodAttestationsVerifyOffline`
+in `cmd/smithmark`.
+
+What does not yet run offline is that same clean capability-gap block driven all
+the way through this hook, because `smithmark verify` resolves an npm mcp-server's
+subject digest only from the npm packument or OCI referrers, both of which need
+the network. Pointed at the local misdeclared server offline, the hook therefore
+fails closed on `DISCOVERY_FAILED` (the fixture was never published), not on the
+capability gap; a local-source mcp-server with no network digest resolution
+instead fails `SUBJECT_DIGEST_MATCH` (an empty digest against the attested one),
+proven. The clean offline mcp-server block through the hook awaits the M6 pinned
+bundle or trust root verify path that verifies against a supplied bundle without
+a registry round trip. This hook's logic already handles an mcp-server
+identically to the skill case, since verify's report shape and exit contract do
+not differ by artifact kind; only the offline digest resolution is missing. See
+`docs/demo.md` for the full recorded walkthrough.

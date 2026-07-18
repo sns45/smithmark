@@ -26,16 +26,15 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     # The write scopes live on this job alone, where the release is created,
-    # the GHCR image is pushed, and Phase 6's keyless signing will exchange the
-    # OIDC identity for a short lived certificate.
+    # the GHCR image is pushed, and Phase 6's forgeseal steps below exchange
+    # the OIDC identity for a short lived Sigstore certificate.
     permissions:
       contents: write # create the GitHub release and upload its assets
       packages: write # push the smithmark image to GHCR
-      # Keyless Sigstore readiness: this token is not consumed yet (no signing
-      # step runs in this workflow today), but the OIDC identity it grants is
-      # exactly what Phase 6's cosign/sigstore-go signing step will exchange for
-      # a short lived certificate, so the permission is requested here ahead of
-      # that work landing.
+      # Keyless Sigstore signing: forgeseal's sign, attest, and pipeline
+      # subcommands below detect this ambient GitHub Actions OIDC token
+      # (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN) themselves and exchange it for a
+      # short lived Fulcio certificate; no other step in this job consumes it.
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -64,12 +63,107 @@ jobs:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
       # ------------------------------------------------------------------
-      # Phase 6 lands its steps here, after the GoReleaser release above and
-      # before the workflow ends: running forgeseal's own pipeline against
-      # the release artifacts to produce an SBOM, smithmark self attesting
-      # its own release binaries, and the assayward gate evaluating the
-      # result, mirroring the shape of forgeseal's release workflow and its
-      # separate assayward gate workflow. No signing steps run in this
-      # workflow yet; the id-token permission above is what those future
-      # steps will use for keyless Sigstore signing.
+      # Phase 6 (Task 6.2): self attestation gated by assayward, mirroring
+      # forgeseal's own release workflow and its separate assayward gate
+      # workflow (spec section 11). smithmark ships as a Go binary, not an
+      # mcp-server or a skill, so the capability manifest model (smithmark.yaml,
+      # D6's agent-capability predicate) does not apply to smithmark itself;
+      # there is no CLI or binary ArtifactKind in the v0.1 model. What
+      # genuinely does apply, and is real, not fabricated, is composed here:
+      # forgeseal produces the dependency SBOM and SLSA provenance for
+      # smithmark's own release (forgeseal is the family's SBOM and
+      # provenance tool; smithmark composes it rather than duplicating SBOM
+      # generation), the release binaries are signed keyless via Sigstore in
+      # this job using the id-token permission requested above, and the
+      # separate .github/workflows/assayward-gate.yml workflow evaluates the
+      # published release against assayward-dogfood-policy.yaml. See the
+      # dated M6 note in docs/decisions.md for the full account of this
+      # modeling tension and the evidence handoff gap discovered while
+      # wiring forgeseal's output to assayward's verify command.
       # ------------------------------------------------------------------
+
+      # Pinned to the exact tagged forgeseal release whose CLI surface (the
+      # pipeline, sign, and attest subcommands and their flags) was read from
+      # source and exercised locally while authoring this workflow.
+      - name: Install forgeseal
+        run: |
+          go install github.com/sns45/forgeseal/cmd/forgeseal@v0.5.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # forgeseal's dependency SBOM and SLSA provenance for smithmark itself,
+      # both signed keyless: --keyed=false switches forgeseal's signer from
+      # its default offline CA to real Sigstore (Fulcio plus Rekor) via
+      # sigstore-go. No --identity-token is passed; forgeseal's keyless
+      # signer detects the ambient GitHub Actions OIDC request URL and token
+      # (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN), which the id-token permission
+      # above supplies, and exchanges it for a short lived Fulcio certificate
+      # itself.
+      - name: Generate SBOM and provenance for smithmark with forgeseal
+        run: |
+          forgeseal pipeline \
+            --dir . \
+            --output-dir ./forgeseal-output \
+            --sign \
+            --attest \
+            --keyed=false
+
+      # forgeseal's pipeline command treats a keyless signing failure inside
+      # the SBOM and provenance steps as a warning, not a fatal error (it
+      # falls back to writing an unsigned artifact and continues), so a
+      # transient Fulcio or Rekor issue would otherwise pass this step
+      # silently. Confirmed locally: the signature bundle sidecar file is
+      # simply absent when signing fails and present when it succeeds, so
+      # asserting both sidecars exist turns that silent degradation into a
+      # loud, fail closed workflow error instead.
+      - name: Confirm the dependency SBOM and provenance were actually signed
+        run: |
+          test -f ./forgeseal-output/sbom.cdx.json.sigstore.json
+          test -f ./forgeseal-output/sbom.cdx.json.intoto.jsonl.sigstore.json
+
+      # The release binaries themselves: GoReleaser's checksums.txt (the
+      # checksum step above) lists every archive, package, and container
+      # image digest this release published, so signing and attesting that
+      # one file covers the whole release, the same "sign the checksums
+      # file" pattern GoReleaser's own cosign documentation recommends over
+      # signing each artifact individually. Unlike pipeline's embedded
+      # signing, the standalone sign and attest subcommands fail the
+      # workflow immediately (exit 1) on a keyless signing failure rather
+      # than warning and continuing, confirmed locally against both
+      # commands.
+      - name: Sign the release checksums with forgeseal
+        run: |
+          forgeseal sign \
+            --artifact ./dist/checksums.txt \
+            --keyed=false \
+            --bundle ./forgeseal-output/checksums.txt.sigstore.json
+
+      - name: Attest the release checksums with forgeseal
+        run: |
+          forgeseal attest \
+            --subject ./dist/checksums.txt \
+            --sign \
+            --keyed=false \
+            --output ./forgeseal-output/checksums.txt.intoto.jsonl
+
+      - name: Upload supply chain artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smithmark-supply-chain
+          path: ./forgeseal-output/
+
+      - name: Attach supply chain artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          for f in ./forgeseal-output/*; do
+            gh release upload "$tag" "$f" --clobber
+          done
+
+      # This job cannot run to a genuinely signed, gated conclusion offline:
+      # keyless signing needs a real GitHub Actions OIDC token and a real
+      # tag push. The maintainer's first tagged run is what actually
+      # exercises the --keyed=false path above and the assayward gate in
+      # .github/workflows/assayward-gate.yml; record that run's URL in
+      # docs/decisions.md once it completes, honestly, rather than assuming
+      # it here.

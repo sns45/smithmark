@@ -1,0 +1,120 @@
+# Capability declaration for dear-claude 1.1.0 (Task 6.1 dogfood).
+#
+# Authored by reading the vendored src, not generated: every entry below is a
+# capability the committed TypeScript actually exercises. See docs/decisions.md
+# (M6 dogfood note) for the taxonomy friction this real server surfaced, notably
+# the env var driven filesystem paths (Obsidian vault, GitHub App key) the D1 fs
+# grammar cannot express without the dishonestly broad "**" escape hatch.
+#
+# Tools are not declared here (U2): attest extracts them from the running server
+# or reads them with --tools-from. The committed tools.json beside this file is
+# the static tool listing transcribed from src/mcp.ts's inline JSON Schemas,
+# standing in for a live extraction the real release would perform.
+kind: mcp-server
+name: dear-claude
+version: 1.1.0
+source: npm
+mcp:
+  transports:
+    - stdio
+capabilities:
+  networkEgress:
+    - host: api.github.com
+      ports: [443]
+      reason: GitHub REST API for issues, PRs, comments, and App installation tokens (github-adapter.ts)
+    - host: github.com
+      ports: [443]
+      reason: GitHub OAuth authorize and token exchange, and authenticated git clone URLs (github-adapter.ts)
+    - host: api.linear.app
+      ports: [443]
+      reason: Linear GraphQL API and OAuth token exchange (linear-adapter.ts)
+    - host: linear.app
+      ports: [443]
+      reason: Linear OAuth authorize endpoint (linear-adapter.ts)
+    - host: gitlab.com
+      ports: [443]
+      reason: GitLab REST API v4 and clone URLs; default host, overridable to a self hosted instance via GITLAB_URL (gitlab-adapter.ts)
+    - host: "*.atlassian.net"
+      ports: [443]
+      reason: Jira Cloud REST API; the subdomain is the JIRA_DOMAIN tenant (jira-adapter.ts)
+    - host: api.notion.com
+      ports: [443]
+      reason: Notion API and OAuth token exchange (notion-adapter.ts)
+    - host: api.giphy.com
+      ports: [443]
+      reason: transitive egress via the gif search curl handed to the spawned claude subprocess (claude-executor.ts)
+    - host: api.anthropic.com
+      ports: [443]
+      reason: Claude Code CLI subprocess launched via @anthropic-ai/claude-agent-sdk query() (claude-executor.ts)
+  filesystem:
+    - path: ${home}/.dear-claude/**
+      access: readwrite
+      reason: SQLite database of instances and OAuth tokens; default dir, overridable via DEAR_CLAUDE_DATA_DIR (db/schema.ts)
+    - path: data/**
+      access: readwrite
+      reason: Per instance workspaces and context JSON under the working directory (instance-manager.ts)
+    - path: ${home}/.claude.json
+      access: read
+      reason: Reads the local Claude Code MCP config to pass through to spawned instances (claude-executor.ts)
+    - path: ${tmp}/dear-claude-debug.log
+      access: write
+      reason: Debug log (server.ts, github-adapter.ts)
+  exec:
+    - binary: claude
+      reason: Claude Code CLI subprocess spawned transitively by @anthropic-ai/claude-agent-sdk query() with permissions bypassed (claude-executor.ts)
+    - binary: tailscale
+      reason: Sets up the Tailscale Funnel that exposes the webhook server publicly (transport.ts)
+    - binary: which
+      reason: Locates the tailscale binary before invoking it (transport.ts)
+    - binary: open
+      reason: Launches the Tailscale app on macOS (transport.ts)
+    - binary: sudo
+      reason: Starts the tailscaled daemon via systemctl on Linux (transport.ts)
+    - binary: pkill
+      reason: Tears down stale tailscale funnel and serve processes (transport.ts)
+  env:
+    - DEAR_CLAUDE_DATA_DIR
+    - DEAR_CLAUDE_PORT
+    - GIPHY_API_KEY
+    - GITHUB_ACCESS_TOKEN
+    - GITHUB_APP_ID
+    - GITHUB_APP_PRIVATE_KEY
+    - GITHUB_APP_PRIVATE_KEY_PATH
+    - GITHUB_CLIENT_ID
+    - GITHUB_CLIENT_SECRET
+    - GITHUB_INSTALLATION_ID
+    - GITHUB_WEBHOOK_SECRET
+    - GITLAB_ACCESS_TOKEN
+    - GITLAB_URL
+    - GITLAB_WEBHOOK_SECRET
+    - JIRA_API_TOKEN
+    - JIRA_DOMAIN
+    - JIRA_USER_EMAIL
+    - JIRA_WEBHOOK_SECRET
+    - LINEAR_ACCESS_TOKEN
+    - LINEAR_CLIENT_ID
+    - LINEAR_CLIENT_SECRET
+    - LINEAR_WEBHOOK_SECRET
+    - NOTION_ACCESS_TOKEN
+    - NOTION_CLIENT_ID
+    - NOTION_CLIENT_SECRET
+    - NOTION_WEBHOOK_SECRET
+    - OBSIDIAN_VAULT_PATH
+    - OBSIDIAN_WATCH_DEBOUNCE_MS
+    - TAILSCALE_HOSTNAME
+  secrets:
+    - access-token:github
+    - client-secret:github
+    - webhook-secret:github
+    - private-key:github
+    - access-token:gitlab
+    - webhook-secret:gitlab
+    - access-token:linear
+    - client-secret:linear
+    - webhook-secret:linear
+    - api-token:jira
+    - webhook-secret:jira
+    - access-token:notion
+    - client-secret:notion
+    - webhook-secret:notion
+    - api-key:giphy

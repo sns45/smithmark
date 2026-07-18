@@ -1,0 +1,66 @@
+{
+  "name": "better-call-claude",
+  "version": "3.1.1",
+  "mcpName": "io.github.sns45/better-call-claude",
+  "description": "Bi-directional communication for Claude Code via Voice Calls, SMS, and WhatsApp. Cross-channel context sharing between voice and WhatsApp.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "better-call-claude": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node --external @whiskeysockets/baileys --external @hapi/boom --external pino --external qrcode-terminal",
+    "prepublishOnly": "npm run build",
+    "baileys:pair": "npx tsx scripts/baileys-pair.ts",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "hono": "^4.6.0",
+    "openai": "^4.77.0",
+    "telnyx": "^5.0.0",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "@hapi/boom": "^10.0.0",
+    "pino": "^9.0.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tsx": "^4.0.0"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "phone",
+    "voice",
+    "sms",
+    "whatsapp",
+    "telnyx",
+    "twilio",
+    "baileys"
+  ],
+  "author": "Shantanu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sns45/better-call-claude.git"
+  },
+  "homepage": "https://github.com/sns45/better-call-claude#readme",
+  "bugs": {
+    "url": "https://github.com/sns45/better-call-claude/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

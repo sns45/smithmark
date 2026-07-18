@@ -1,0 +1,60 @@
+{
+  "name": "dear-claude",
+  "version": "1.1.0",
+  "mcpName": "io.github.sns45/dear-claude",
+  "description": "MCP server that triggers local Claude Code instances from external platforms (GitHub, Linear, Jira, GitLab, Notion, Obsidian) when 'Dear Claude' is mentioned",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "dear-claude": "./dist/index.js"
+  },
+  "files": [
+    "dist/index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.25",
+    "@linear/sdk": "^29.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@octokit/rest": "^20.0.0",
+    "commander": "^12.0.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "linear",
+    "github",
+    "gitlab",
+    "jira",
+    "notion",
+    "obsidian",
+    "automation",
+    "dear-claude"
+  ],
+  "author": "Shantanu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sns45/dear-claude.git"
+  },
+  "homepage": "https://github.com/sns45/dear-claude#readme",
+  "bugs": {
+    "url": "https://github.com/sns45/dear-claude/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
