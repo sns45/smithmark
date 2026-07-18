@@ -102,9 +102,9 @@ const (
 	SkillScriptPathInvalid = "SKILL_SCRIPT_PATH_INVALID"
 	// StatementSubjectInvalid reports a parsed statement that does not carry
 	// exactly one subject with a non empty name (D6 binds one artifact). It is
-	// also raised by the Evidence block builder when a report subject does not
-	// carry exactly one digest, the cardinality assayward's ImageRef shape
-	// requires (U5).
+	// also raised by the Evidence block builder when a report subject carries
+	// no digest at all, since assayward's ArtifactRef.Digest requires at least
+	// one algorithm entry (U5).
 	StatementSubjectInvalid = "STATEMENT_SUBJECT_INVALID"
 )
 

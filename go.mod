@@ -15,7 +15,11 @@ require (
 	oras.land/oras-go/v2 v2.6.2
 )
 
-require github.com/sns45/assayward v0.1.0
+// TODO(assayward v0.2.0): this is an @main pseudo-version carrying the
+// unreleased assayward Evidence schema (ArtifactRef + SchemaVersion). Change
+// this to v0.2.0 once assayward tags that release. See
+// pkg/core/verify/contract_test.go.
+require github.com/sns45/assayward v0.1.1-0.20260718211804-aa7375f45cac
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect

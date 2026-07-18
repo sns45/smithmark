@@ -192,12 +192,14 @@ func Run(in Input, sv SignatureVerifier) (*VerificationReport, error) {
 	return report, nil
 }
 
-// evidenceImage mirrors assayward's pkg/core.ImageRef (U5): a plain name and a
-// single "<alg>:<hex>" digest string, pinned by contract_test.go against the
-// real assayward module.
-type evidenceImage struct {
-	Name   string `json:"name"`
-	Digest string `json:"digest"`
+// evidenceArtifact mirrors assayward's pkg/core.ArtifactRef (U5): a kind
+// tagged name and an algorithm keyed digest set, pinned by contract_test.go
+// against the real assayward module.
+type evidenceArtifact struct {
+	Kind   string            `json:"kind"`
+	Name   string            `json:"name"`
+	Digest map[string]string `json:"digest"`
+	Source string            `json:"source,omitempty"`
 }
 
 // evidenceAttestation mirrors assayward's pkg/core.Attestation (U5). Envelope
@@ -215,32 +217,41 @@ type evidenceAttestation struct {
 // omitted entirely rather than marshaled as null: smithmark carries no
 // workload identity, and assayward's field is optional (omitempty).
 type evidenceBlock struct {
-	Image        evidenceImage         `json:"image"`
-	Attestations []evidenceAttestation `json:"attestations"`
-	FetchedAt    time.Time             `json:"fetchedAt"`
+	Artifact      evidenceArtifact      `json:"artifact"`
+	Attestations  []evidenceAttestation `json:"attestations"`
+	SchemaVersion string                `json:"schemaVersion"`
+	FetchedAt     time.Time             `json:"fetchedAt"`
 }
+
+// evidenceSchemaVersion must equal assaywardcore.EvidenceSchemaVersion;
+// pinned by contract_test.go. verify.go itself imports no assayward package
+// (the pkg/core purity guard), so this constant is smithmark's own mirror of
+// that value rather than a reference to it; the contract test is what proves
+// the two stay equal.
+const evidenceSchemaVersion = "0.2.0"
 
 // EvidenceBlock builds the assayward compatible Evidence block for r (spec 7,
 // U5). bundle is the winning candidate's raw bytes, the same bundle whose
 // outcomes r.Checks already records: the report itself retains no bundle
 // bytes, so the caller (the CLI, Task 3.5) passes them in.
 //
-// Until assayward ships a kind tagged ArtifactRef, the block maps r.Subject
-// into assayward's existing ImageRef{Name, Digest} shape and carries
-// r.Subject.Kind in SignatureNote prose as a shim; the M5 gh issue (Task 5.4)
-// removes it once assayward's Evidence widens to accept a kind directly.
-// Attestations always has exactly one entry: PredicateType is the smithmark
-// agent capability v1 constant, Envelope is the DSSE envelope JSON extracted
-// from bundle's protojson dsseEnvelope field, and Verified is the
-// SIGNATURE_VALID outcome Run already decided, never reevaluated here.
-// FetchedAt is r.VerifiedAt, the injected clock, never the wall clock.
+// The block maps r.Subject into assayward's kind tagged ArtifactRef{Kind,
+// Name, Digest, Source} directly: Kind carries r.Subject.Kind (no more prose
+// shim in SignatureNote), and Digest carries every algorithm the subject's
+// DigestSet declares (see artifactDigest), since ArtifactRef supports more
+// than one. SchemaVersion is evidenceSchemaVersion, pinned equal to
+// assayward's EvidenceSchemaVersion by contract_test.go. Attestations always
+// has exactly one entry: PredicateType is the smithmark agent capability v1
+// constant, Envelope is the DSSE envelope JSON extracted from bundle's
+// protojson dsseEnvelope field, and Verified is the SIGNATURE_VALID outcome
+// Run already decided, never reevaluated here. FetchedAt is r.VerifiedAt, the
+// injected clock, never the wall clock.
 //
-// The same M5 issue must also make assayward digest algorithm aware: its
-// VerifySLSA strips a "sha256:" prefix from ImageRef.Digest unconditionally,
-// which would mangle the "smithmark-bundle-v1:" prefixed skill digest this
-// block carries (see singleDigest); the Task 5.4 issue names that landmine.
+// assayward's SLSA subject matching is algorithm aware, so a
+// "smithmark-bundle-v1:" keyed digest round trips through Digest without any
+// prefix stripping or other mangling.
 func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, error) {
-	digest, err := singleDigest(r.Subject.Digest)
+	digest, err := artifactDigest(r.Subject.Digest)
 	if err != nil {
 		return nil, err
 	}
@@ -256,11 +267,11 @@ func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, erro
 			break
 		}
 	}
-	note := fmt.Sprintf("kind=%s; smithmark agent capability attestation; signature %s",
-		r.Subject.Kind, validityWord(verified))
+	note := fmt.Sprintf("smithmark agent capability attestation; signature %s", validityWord(verified))
 
 	block := evidenceBlock{
-		Image: evidenceImage{
+		Artifact: evidenceArtifact{
+			Kind:   string(r.Subject.Kind),
 			Name:   manifest.SubjectName(r.Subject),
 			Digest: digest,
 		},
@@ -270,32 +281,28 @@ func (r *VerificationReport) EvidenceBlock(bundle []byte) (json.RawMessage, erro
 			Verified:      verified,
 			SignatureNote: note,
 		}},
-		FetchedAt: r.VerifiedAt,
+		SchemaVersion: evidenceSchemaVersion,
+		FetchedAt:     r.VerifiedAt,
 	}
 	return json.Marshal(block)
 }
 
-// singleDigest renders a DigestSet carrying exactly one algorithm key as
-// "<alg>:<hex>", the shape assayward's ImageRef.Digest expects (U5). A report
-// subject must carry exactly one digest to fit that shape; zero or several
-// keys is the subject's own shape being wrong for this purpose, not an
-// internal failure, so it is coded STATEMENT_SUBJECT_INVALID rather than
-// InternalError.
-//
-// Landmine to retire in M5: assayward's VerifySLSA strips a "sha256:" prefix
-// from ImageRef.Digest unconditionally. A skill subject carries a
-// "smithmark-bundle-v1:" prefixed digest, so that prefix must be preserved and
-// understood by any consumer; the Task 5.4 assayward issue asks for digest
-// algorithm awareness so this prefix is never silently trimmed or mishandled.
-func singleDigest(d manifest.DigestSet) (string, error) {
-	if len(d) != 1 {
-		return "", codes.E(codes.StatementSubjectInvalid,
-			"assayward Evidence requires exactly one subject digest, got %d", len(d))
+// artifactDigest copies a DigestSet into the map[string]string shape
+// assayward's ArtifactRef.Digest expects (U5). ArtifactRef is not limited to
+// one algorithm the way ImageRef.Digest was, so any non empty set is valid;
+// only a subject with zero digests is the subject's own shape being wrong for
+// this purpose, not an internal failure, so it is coded
+// STATEMENT_SUBJECT_INVALID rather than InternalError.
+func artifactDigest(d manifest.DigestSet) (map[string]string, error) {
+	if len(d) == 0 {
+		return nil, codes.E(codes.StatementSubjectInvalid,
+			"assayward Evidence requires at least one subject digest, got 0")
 	}
+	out := make(map[string]string, len(d))
 	for alg, hex := range d {
-		return alg + ":" + hex, nil
+		out[alg] = hex
 	}
-	panic("unreachable: len(d) == 1 guarantees exactly one iteration")
+	return out, nil
 }
 
 // validityWord renders a boolean as the "valid" or "invalid" word

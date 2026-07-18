@@ -32,7 +32,7 @@ Every check, finding, and operational condition smithmark reports carries a stab
 | `GENERATED_AT_INVALID` | validation | The generatedAt timestamp is zero, not in UTC, or carries sub second precision. | M1 |
 | `MANIFEST_FIELD_REQUIRED` | validation | A required identity string is empty, such as the artifact name, a generator field, an mcp tool name, or a dependency SBOM field when the dependencies block is present; also raised when a skill bundle is missing its required SKILL.md entry file. | M1 |
 | `SKILL_SCRIPT_PATH_INVALID` | validation | A skill script path is not a clean relative path using forward slashes, or two scripts share the same path. | M1 |
-| `STATEMENT_SUBJECT_INVALID` | validation | A parsed statement does not carry exactly one subject with a non empty name; also raised when building an Evidence block from a report whose subject does not carry exactly one digest, the cardinality assayward's ImageRef shape requires. | M1 |
+| `STATEMENT_SUBJECT_INVALID` | validation | A parsed statement does not carry exactly one subject with a non empty name; also raised when building an Evidence block from a report whose subject carries no digest at all, since assayward's ArtifactRef.Digest requires at least one algorithm entry. | M1 |
 | `BUNDLE_EMPTY` | validation | A skill bundle was given no files to digest. | M1 |
 | `BUNDLE_PATH_INVALID` | validation | A bundle file path is not a clean relative path using forward slashes. | M1 |
 | `BUNDLE_DUPLICATE_PATH` | validation | Two entries in a bundle share the same path. | M1 |
