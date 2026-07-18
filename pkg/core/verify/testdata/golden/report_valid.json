@@ -27,7 +27,7 @@
       "code": "NPM_PROVENANCE_VERIFIED",
       "passed": false,
       "informational": true,
-      "detail": "full verification requires the Sigstore trust root, exercised live in M6"
+      "detail": "full verification requires the Sigstore trust root, a later addition not performed in v0.1"
     },
     {
       "code": "PREDICATE_VERSION_UNSUPPORTED",
@@ -43,7 +43,7 @@
       "code": "REKOR_INCLUSION_VALID",
       "passed": false,
       "informational": true,
-      "detail": "no transparency log inclusion entry; key based offline bundles carry none, and verifying an inclusion proof offline needs the log key from the Sigstore trust root (M6)"
+      "detail": "no transparency log inclusion entry; key based offline bundles carry none, and verifying an inclusion proof offline needs the log key from the Sigstore trust root, a later addition"
     },
     {
       "code": "SIGNATURE_VALID",

@@ -114,7 +114,7 @@ func productionDeps() *deps {
 				// DISCOVERY_FAILED naming the limitation instead (tracked in
 				// sns45/smithmark#4; the live wiring lands with M6).
 				return nil, codes.E(codes.DiscoveryFailed,
-					"no OCI repository resolved for live attestation discovery; v0.1 does not yet scope the registry client to the per artifact repository AttestationRef computes (see sns45/smithmark#4). Pass --bundle to verify an explicit bundle, or wait for M6 live wiring")
+					"no OCI repository resolved for live attestation discovery; v0.1 does not yet scope the registry client to the per artifact repository AttestationRef computes (see sns45/smithmark#4). Pass --bundle to verify an explicit bundle, or wait for the live registry wiring in a later release")
 			}
 			return remote.NewRepository(repo)
 		},

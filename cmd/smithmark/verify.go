@@ -81,12 +81,12 @@ func newVerifyCmd(d *deps) *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.BoolVar(&o.strict, "strict", false, "exit 2 when a passing verification carries any UNDECLARED_ lint finding (findings land in M4)")
+	f.BoolVar(&o.strict, "strict", false, "exit 2 when a passing verification carries any UNDECLARED_ lint finding")
 	f.StringVar(&o.bundle, "bundle", "", "verify this explicit attestation bundle file instead of discovering one")
 	f.StringVar(&o.attestationBase, "attestation-base", "", "base OCI registry for attestation discovery (else SMITHMARK_ATTESTATION_BASE or package.json)")
-	f.StringVar(&o.trustRoot, "trust-root", "", "path to a PEM public key to verify key based bundles against (the Sigstore TUF trust root form lands in M6)")
-	f.StringVar(&o.certificateIdentity, "certificate-identity", "", "expected signing certificate identity for keyless verification (accepted; verification lands with M6 trust root support)")
-	f.StringVar(&o.certificateOIDCIssuer, "certificate-oidc-issuer", "", "expected OIDC issuer for keyless verification (accepted; verification lands with M6 trust root support)")
+	f.StringVar(&o.trustRoot, "trust-root", "", "path to a PEM public key to verify key based bundles against; keyless verification against a Sigstore TUF trust root is a later addition")
+	f.StringVar(&o.certificateIdentity, "certificate-identity", "", "expected signing certificate identity for keyless verification (accepted; keyless verification is a later addition, not performed in v0.1)")
+	f.StringVar(&o.certificateOIDCIssuer, "certificate-oidc-issuer", "", "expected OIDC issuer for keyless verification (accepted; keyless verification is a later addition, not performed in v0.1)")
 	f.StringVar(&o.output, "output", outputSummary, "output format: summary or json")
 	return cmd
 }
@@ -106,7 +106,7 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 	// lands with M6. Fail closed here, never a silent ignore.
 	if o.certificateIdentity != "" || o.certificateOIDCIssuer != "" {
 		return codes.E(codes.SigningConfigInvalid,
-			"verify: keyless certificate verification is not supported in v0.1; --certificate-identity and --certificate-oidc-issuer verification lands with M6 trust root support")
+			"verify: keyless certificate verification is not supported in v0.1; keyless verification against a Sigstore trust root is a later addition")
 	}
 
 	disc, err := discoverForVerification(ctx, d, arg, o.attestationBase, o.bundle)
@@ -220,7 +220,7 @@ func verifyDiscovered(d *deps, disc *discover.Discovered, trustRootPath string) 
 	if len(disc.Bundles) > 0 {
 		if trustRootPath == "" {
 			return nil, codes.E(codes.SigningConfigInvalid,
-				"%d attestation bundle(s) were discovered but no --trust-root was provided; v0.1 verifies key based bundles against a PEM public key (the Sigstore TUF trust root form lands in M6)", len(disc.Bundles))
+				"%d attestation bundle(s) were discovered but no --trust-root was provided; v0.1 verifies key based bundles against a PEM public key (keyless verification against a Sigstore TUF trust root is a later addition)", len(disc.Bundles))
 		}
 		var err error
 		trust, err = os.ReadFile(trustRootPath)

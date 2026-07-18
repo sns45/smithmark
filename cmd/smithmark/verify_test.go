@@ -361,7 +361,7 @@ func TestVerifyDiscoveryFailedExitsThree(t *testing.T) {
 
 // TestVerifyCertificateIdentityRejected proves keyless verification is accepted
 // but fails closed in v0.1: setting --certificate-identity exits 3 with
-// SIGNING_CONFIG_INVALID naming M6, never a silent ignore.
+// SIGNING_CONFIG_INVALID naming keyless verification as a later addition, never a silent ignore.
 func TestVerifyCertificateIdentityRejected(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	d := verifyDeps(t, &stdout, &stderr)
@@ -378,8 +378,8 @@ func TestVerifyCertificateIdentityRejected(t *testing.T) {
 	if line.Code != codes.SigningConfigInvalid {
 		t.Errorf("code = %q, want %q", line.Code, codes.SigningConfigInvalid)
 	}
-	if !strings.Contains(line.Detail, "M6") {
-		t.Errorf("detail %q should name M6 as where keyless verification lands", line.Detail)
+	if !strings.Contains(line.Detail, "keyless verification") {
+		t.Errorf("detail %q should name keyless verification as a later addition", line.Detail)
 	}
 }
 
