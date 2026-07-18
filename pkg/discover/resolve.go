@@ -376,14 +376,13 @@ func discoverByTag(ctx context.Context, opts ResolveOptions, ref manifest.Artifa
 	if err != nil {
 		return nil, nil, codes.E(codes.DiscoveryFailed, "mapping attestation ref for %s %q: %v", ref.Kind, ref.Name, err)
 	}
-	_ = repo // Task 2 threads this; Task 1 preserves the base scoped behavior below.
 
 	if opts.NewTarget == nil {
 		return nil, []string{notef(NoteNoOCITarget, "no OCI target factory configured; skipping tag based attestation discovery")}, nil
 	}
-	target, err := opts.NewTarget(ctx, base)
+	target, err := opts.NewTarget(ctx, repo)
 	if err != nil {
-		return nil, nil, codes.E(codes.DiscoveryFailed, "scoping attestation target to %q: %v", base, err)
+		return nil, nil, codes.E(codes.DiscoveryFailed, "scoping attestation target to %q: %v", repo, err)
 	}
 
 	desc, err := target.Resolve(ctx, tag)

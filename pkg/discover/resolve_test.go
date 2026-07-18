@@ -351,6 +351,43 @@ func TestResolveNPMArgMalformedBaseFails(t *testing.T) {
 	assertCode(t, err, codes.DiscoveryFailed)
 }
 
+// TestDiscoverByTagScopesToPerArtifactRepository asserts that discoverByTag
+// computes the D3 per artifact repository via AttestationRef and passes that
+// exact value to opts.NewTarget, never the bare attestation base: the
+// headline fix for smithmark#4 (a shared, pre built target previously scoped
+// the OCI client to every artifact's tags at once, rather than to one
+// artifact's own repository). The attestations endpoint is served 404 and
+// nothing is pushed to the memory store, so the tag itself is simply absent;
+// the only thing under test is the repository string NewTarget receives.
+func TestDiscoverByTagScopesToPerArtifactRepository(t *testing.T) {
+	tr := npmTransport(t, http.StatusNotFound, nil)
+	var gotRepo string
+	store := memory.New()
+
+	_, err := discover.Resolve(context.Background(), fixtureNPMName+"@"+fixtureNPMVersion, mustResolveOptions(t, discover.ResolveOptions{
+		Base:      testBase,
+		Transport: tr,
+		NewTarget: func(_ context.Context, repo string) (oras.ReadOnlyGraphTarget, error) {
+			gotRepo = repo
+			return store, nil
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// fixtureNPMName is the scoped package name
+	// "@modelcontextprotocol/server-filesystem"; AttestationRef's
+	// encodeNPMName strips the leading "@" and lowercases the remainder
+	// (already lowercase here), giving the encoded repository segment
+	// "modelcontextprotocol/server-filesystem" per decision D3. This is
+	// deliberately not fixtureNPMName verbatim: that string still carries the
+	// "@" scope marker, which is not a valid OCI repository path segment.
+	want := testBase + "/npm/modelcontextprotocol/server-filesystem"
+	if gotRepo != want {
+		t.Errorf("NewTarget scoped to %q, want the per artifact repository %q (not the bare base %q)", gotRepo, want, testBase)
+	}
+}
+
 // --- base resolution wiring (D3) --------------------------------------------
 
 // TestResolveSurfacesAttestationBaseUnknown asserts that when discovery needs
