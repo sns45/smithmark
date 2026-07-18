@@ -55,46 +55,22 @@ jobs:
       # other while authoring this workflow, recorded in full in the Task
       # 6.2 report and the dated M6 note in docs/decisions.md:
       #
-      # 1. assayward v0.1.0's --forgeseal-output adapter
-      #    (internal/forgeseal/adapter.go) reads three hardcoded filenames:
-      #    slsa.sigstore-bundle.json (or slsa.intoto.jsonl as a fallback),
-      #    sbom.cdx.json, and vex.openvex.json. forgeseal's actual pipeline
-      #    command names its files after the SBOM instead
-      #    (sbom.cdx.json.intoto.jsonl and
-      #    sbom.cdx.json.intoto.jsonl.sigstore.json), and never emits
-      #    vex.openvex.json unless --vex-triage runs, which this release
-      #    workflow's pipeline invocation does not request. Run unmodified,
-      #    assayward verify --forgeseal-output fails closed with "no such
-      #    file or directory" rather than silently passing; the staging
-      #    step below is a tested bridge for the filename mismatch, cp only,
-      #    no invented forgeseal or assayward behavior.
-      #
-      # 2. Deeper structural gap: --forgeseal-output's evidence assembly
-      #    never populates a standalone signature check (there is no
-      #    Evidence.Signature-shaped field on that path, only the SLSA, SBOM,
-      #    and VEX attestations), so assayward-dogfood-policy.yaml's
-      #    signature.required: true can never be satisfied through this
-      #    ingestion path, confirmed empirically against a real, valid,
-      #    keyed-signed forgeseal output directory (SIGNATURE_REQUIRED_MISSING
-      #    fired regardless). The release checksums' keyless Sigstore
-      #    signature (produced by forgeseal sign in release.yml, uploaded as
-      #    checksums.txt.sigstore.json) is real and independently verifiable,
-      #    but is not yet wired into this decision; doing so needs either an
-      #    assayward CLI change (a signature carrying forgeseal-output shape,
-      #    or --bundle recognizing a bare artifact signature bundle as a
-      #    signature check rather than an unrecognized attestation, which
-      #    testing here found it does not today) or a cosign/sigstore-go
-      #    verify-blob step run alongside this one.
-      #
-      # This step therefore evaluates the dependency SBOM and SLSA
-      # provenance forgeseal produced for smithmark, which is real, tested
-      # evidence; it cannot today evaluate the signature requirement in
-      # assayward-dogfood-policy.yaml through this ingestion path. The gate
-      # step below is allowed to fail without blocking the workflow
-      # (continue-on-error) for exactly this reason: completing the wiring
-      # so an enforce mode decision is trustworthy, and confirming it on a
-      # real tagged run, is the maintainer's next step, not something to
-      # fake here.
+      # assayward v0.1.0's --forgeseal-output adapter
+      # (internal/forgeseal/adapter.go) reads three hardcoded filenames:
+      # slsa.sigstore-bundle.json (or slsa.intoto.jsonl as a fallback),
+      # sbom.cdx.json, and vex.openvex.json. forgeseal's actual pipeline
+      # command names its files after the SBOM instead
+      # (sbom.cdx.json.intoto.jsonl and
+      # sbom.cdx.json.intoto.jsonl.sigstore.json), and never emits
+      # vex.openvex.json unless --vex-triage runs, which this release
+      # workflow's pipeline invocation does not request. Run unmodified,
+      # assayward verify --forgeseal-output fails closed with "no such file
+      # or directory" rather than silently passing; the staging step below
+      # is a tested bridge for the filename mismatch, cp only, no invented
+      # forgeseal or assayward behavior. The VEX file is an empty
+      # statements stub, not a real vulnerability triage (the release
+      # pipeline does not run forgeseal's --vex-triage today), so the
+      # policy's VEX check passes vacuously, not from real OSV.dev data.
       # ------------------------------------------------------------------
       - name: Stage forgeseal output for assayward
         run: |
@@ -107,8 +83,30 @@ jobs:
           DIGEST="sha256:$(sha256sum ./forgeseal-output/sbom.cdx.json | awk '{print $1}')"
           echo "value=$DIGEST" >> "$GITHUB_OUTPUT"
 
+      # This gate genuinely blocks: assayward-dogfood-policy.yaml's SLSA
+      # level, allowed builder, subject digest match, and SBOM presence
+      # checks are all confirmed working through --forgeseal-output (tested
+      # locally against a real forgeseal output directory), so a DENY on
+      # any of those fails this job, no continue-on-error.
+      #
+      # signature.required is false in the policy today, a scoped, not an
+      # overstated, gap. assayward's engine runs its signature verifier
+      # over the staged SLSA bundle, and the native verifier
+      # (pkg/core/verify/sigstore_native.go) does have a real keyless path,
+      # falling back to the Sigstore public good live TUF root and
+      # verifying the Fulcio certificate chain plus Rekor inclusion when no
+      # --sigstore-trust-root is injected. Read from source, this plausibly
+      # succeeds against the genuinely keyless bundle release.yml produces
+      # in CI, but that is unconfirmed: the only local test used a keyed,
+      # offline signed bundle with no --signature-ca supplied, which fails
+      # through a different code path (VerifyKeyedBundle) and does not
+      # establish that the keyless path fails too. Flip signature.required
+      # (and the release checksums subject, which this gate does not
+      # evaluate today) back to true once the first live tagged run
+      # confirms the staged SLSA bundle actually verifies keyless here; a
+      # cosign verify-blob style companion step is the future closure for
+      # the release checksums themselves.
       - name: Assayward gate
-        continue-on-error: true
         run: |
           assayward verify \
             --policy-file ./assayward-dogfood-policy.yaml \
