@@ -31,9 +31,14 @@ artifacts:
    attestations, verifies signatures and subject digests, and emits a machine
    readable report an external policy engine consumes as evidence.
 
-See the self demonstrating admission demo, run offline and captured verbatim, in
-[`docs/demo.md`](docs/demo.md): an agent runtime declining to load a misdeclared
-MCP server with an explainable deny, and admitting a valid signed one.
+See the self demonstrating admission demo, captured verbatim, in
+[`docs/demo.md`](docs/demo.md). It shows, offline, the capability-gap block of a
+validly signed but misdeclared MCP server and the admission of a valid one at the
+verification core, and the runtime end to end explainable deny and allow through
+the Claude Code hook for a signed skill. The same clean capability-gap block of
+an MCP server driven all the way through the hook offline is honestly not there
+yet: verify resolves an mcp-server digest only over the network today, so it
+awaits the M6 pinned bundle or trust root verify path.
 
 ## The trust as code family
 
@@ -154,9 +159,13 @@ smithmark manifest init            # scaffold a smithmark.yaml declaration
   agent tool artifact as a supply chain check in CI.
 - **Claude Code hook** ([`surfaces/claude-code-hook/`](surfaces/claude-code-hook/)):
   the reference runtime shim, a `PreToolUse` hook that gates MCP tool calls
-  behind `smithmark verify` and blocks a misdeclared server with an explainable
-  deny. One shim, well documented; the pattern generalizes, the repo does not
-  chase every runtime.
+  behind `smithmark verify` and returns an explainable allow or deny. Its offline
+  suite demonstrates the end to end block, naming the undeclared capability, and
+  the allow for a signed skill; the same clean capability-gap block of a
+  misdeclared MCP server through the hook offline awaits the M6 verify path, since
+  verify resolves an mcp-server digest only over the network today (see
+  [`docs/demo.md`](docs/demo.md)). One shim, well documented; the pattern
+  generalizes, the repo does not chase every runtime.
 - **Example assayward policies** ([`policies/`](policies/)): `TrustPolicy`
   documents showing the separation the design insists on. smithmark is not a
   policy engine; it hands assayward an Evidence block, and the allow, deny, or

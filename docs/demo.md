@@ -6,11 +6,15 @@ a valid signed one. That is exactly the admission the trust as code family
 enables. The trilogy verifies the supply chain; smithmark extends the same
 discipline to the tools the agents themselves wield.
 
-Everything below was run offline on 2026-07-18 and captured verbatim. Every
-command, exit code, and line of output is real terminal output, pasted as it
-happened. Nothing here is hand authored to look like a run. Where a step cannot
-complete offline, that is stated plainly and the real failure is shown rather
-than hidden. The only edit applied to any pasted output is cosmetic: the
+Every command, exit code, and line of output below is real terminal output
+captured on 2026-07-18 and pasted as it happened. Nothing here is hand authored
+to look like a run. Sections 1 through 3 run with no network at all. Section 4
+deliberately lets the CLI reach the npm registry, because reaching it is exactly
+what exposes the offline seam: the two server fixtures carry synthetic published
+digests, so a real registry lookup either 404s (the fixture was never published)
+or resolves a true digest that does not match the synthetic one. Where a step
+depends on the network, that is stated plainly and the real failure is shown
+rather than hidden. The only edit applied to any pasted output is cosmetic: the
 machine specific absolute path of the checkout is shortened to `...` in section
 4, so the reason strings fit the page; nothing else is altered.
 
@@ -46,16 +50,16 @@ stitch signature, digest, and capability lint into a single invocation offline
 for a fixture that was never published to npm under its synthetic digest.
 
 What that leaves is a demo assembled from real parts, each run through the real
-tool offline:
+tool:
 
-1. the capability gap itself, live, through the real CLI (section 1);
+1. the capability gap itself, live, through the real CLI, offline (section 1);
 2. the full admission decision over the real signed server bundles, end to end,
    offline, through the pure verification core the CLI and hook both consume
    (section 2);
-3. the Claude Code hook emitting a real, explainable deny and a real allow
-   (section 3);
-4. the hook driven at the two real MCP server fixtures, showing exactly what
-   happens and where the offline seam falls (section 4).
+3. the Claude Code hook emitting a real, explainable deny and a real allow,
+   offline, over a signed skill (section 3);
+4. the hook driven at the two real MCP server fixtures, deliberately reaching npm
+   to show exactly what happens and where the offline seam falls (section 4).
 
 The binary under test is a plain `go build` of `./cmd/smithmark` (version
 `dev`). Set once for the runs below:
@@ -290,13 +294,19 @@ explainable deny and allow are real (section 3).
 
 ## What this demonstrates
 
-An agent runtime can refuse to load an MCP server whose declared capabilities do
-not match what its code can do, live, with a machine readable reason a person or
-a policy engine can act on. The signature was never the whole story: a validly
-signed server can still be misdeclared, and the capability layer is what closes
-that gap. smithmark produces the evidence; assayward consumes it; the Claude Code
-hook is the smallest faithful stand in for that admission loop inside an agent
-runtime.
+The capability layer catches what the signature cannot: a validly signed MCP
+server can still be misdeclared, and the gap between what it declares and what
+its code can do is exactly what should block it. That block of the signed
+misdeclared server, and the admission of the valid one, are demonstrated at the
+verification core, offline, over the real signed bundles (section 2), with the
+undeclared capability itself named live by the CLI (section 1). The runtime
+surface, the Claude Code hook, demonstrates the end to end explainable deny and
+allow for a signed skill, offline (section 3). The one thing not yet shown is
+that same clean capability-gap block of a signed MCP server driven all the way
+through the hook offline: that awaits the M6 pinned bundle or trust root verify
+path, because verify resolves an mcp-server digest only over the network today
+(section 4). smithmark produces the evidence; assayward consumes it; the hook is
+the smallest faithful stand in for that admission loop inside an agent runtime.
 
 Reproduce every run above from a clean checkout:
 
