@@ -54,13 +54,24 @@ jobs:
 
       # GoReleaser builds the cross platform binaries, the nfpm packages, the
       # Homebrew tap formula, the GHCR image, and the GitHub release itself.
-      - uses: goreleaser/goreleaser-action@v6
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          install-only: true
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      # The Homebrew tap token lives in the release-tooling/prd Doppler config
+      # and is injected by `doppler run` via the DOPPLER_TOKEN repo secret (a
+      # read only scoped service token), so no HOMEBREW_TAP_GITHUB_TOKEN
+      # mapping is needed here.
+      - name: GoReleaser release (Homebrew tap token via Doppler)
+        run: doppler run -- goreleaser release --clean
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
       # ------------------------------------------------------------------
       # Phase 6 (Task 6.2): self attestation gated by assayward, mirroring
