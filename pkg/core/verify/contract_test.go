@@ -1,23 +1,21 @@
 // contract_test.go is the cross repo drift alarm decision U5 calls for. It
-// pins github.com/sns45/assayward at its v0.1.0 release tag in go.mod and
-// round trips smithmark's Evidence block through assayward's own
-// pkg/core.Evidence type with strict decoding (DisallowUnknownFields). A
-// version bump of the pinned module is a deliberate, loud act: bumping the
-// pin and rerunning this test is how a shape drift between the two repos is
-// caught before it ships, rather than discovered by a consumer at runtime.
+// pins github.com/sns45/assayward in go.mod (currently an @main pseudo
+// version carrying the unreleased v0.2.0 Evidence schema; see go.mod and the
+// PR that introduced this pin for the note to switch to the v0.2.0 tag once
+// assayward cuts it) and round trips smithmark's Evidence block through
+// assayward's own strict assaywardcore.DecodeEvidence, which rejects unknown
+// fields AND validates schemaVersion. A version bump of the pinned module is
+// a deliberate, loud act: bumping the pin and rerunning this test is how a
+// shape drift between the two repos is caught before it ships, rather than
+// discovered by a consumer at runtime.
 //
-// Until assayward ships a kind tagged ArtifactRef, smithmark's subject is
-// mapped into assayward's existing ImageRef{Name, Digest} shape, and the
-// artifact kind rides along in SignatureNote prose as a shim this test also
-// pins; the M5 gh issue (Task 5.4) removes both the pin's need for a shim and
-// this comment once assayward's Evidence widens to accept a kind directly.
-//
-// Caveat: the drift alarm is one directional. It catches a field smithmark
-// emits that assayward v0.1.0 does not expect (strict decode rejects it), but
-// not the reverse: a field assayward adds that smithmark never emits decodes
-// silently into a zero value here and raises nothing. Closing that gap needs an
-// explicit schemaVersion on Evidence so a consumer can pin and detect either
-// direction of drift; that is the second request in the Task 5.4 M5 issue.
+// smithmark's subject maps directly onto assayward's kind tagged
+// ArtifactRef{Kind, Name, Digest, Source}; no shim is needed. Because
+// DecodeEvidence validates schemaVersion in both directions, the drift alarm
+// is no longer one directional the way the ImageRef era's manual decode was:
+// a field smithmark emits that assayward does not expect is rejected by
+// strict decoding, and a schemaVersion smithmark emits that does not match
+// assayward's EvidenceSchemaVersion is rejected too.
 package verify_test
 
 import (
@@ -65,22 +63,28 @@ func TestEvidenceBlockMatchesAssaywardContract(t *testing.T) {
 		t.Fatalf("EvidenceBlock: %v", err)
 	}
 
-	// Strict decode into the PINNED assayward type: an unknown field here
-	// means our block carries something assayward v0.1.0 does not expect.
-	var ev assaywardcore.Evidence
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&ev); err != nil {
-		t.Fatalf("decoding Evidence block into the pinned assayward core.Evidence type: %v", err)
+	// Strict decode via the PINNED assayward module's own decoder: an unknown
+	// field means our block carries something assayward does not expect, and a
+	// mismatched schemaVersion means our block declares a schema assayward's
+	// pinned version does not accept. Both are the stronger contract check
+	// DecodeEvidence gives us over a hand rolled decode.
+	ev, err := assaywardcore.DecodeEvidence(raw)
+	if err != nil {
+		t.Fatalf("decoding Evidence block via the pinned assayward core.DecodeEvidence: %v", err)
 	}
 
 	wantName := manifest.SubjectName(ref)
-	if ev.Image.Name != wantName {
-		t.Errorf("Image.Name = %q, want %q", ev.Image.Name, wantName)
+	if ev.Artifact.Name != wantName {
+		t.Errorf("Artifact.Name = %q, want %q", ev.Artifact.Name, wantName)
 	}
-	wantDigest := "smithmark-bundle-v1:" + ref.Digest["smithmark-bundle-v1"]
-	if ev.Image.Digest != wantDigest {
-		t.Errorf("Image.Digest = %q, want %q", ev.Image.Digest, wantDigest)
+	if got, want := ev.Artifact.Digest["smithmark-bundle-v1"], ref.Digest["smithmark-bundle-v1"]; got != want {
+		t.Errorf("Artifact.Digest[%q] = %q, want %q", "smithmark-bundle-v1", got, want)
+	}
+	if ev.Artifact.Kind != "skill" {
+		t.Errorf("Artifact.Kind = %q, want %q", ev.Artifact.Kind, "skill")
+	}
+	if ev.SchemaVersion != assaywardcore.EvidenceSchemaVersion {
+		t.Errorf("SchemaVersion = %q, want %q", ev.SchemaVersion, assaywardcore.EvidenceSchemaVersion)
 	}
 	if len(ev.Attestations) != 1 {
 		t.Fatalf("Attestations has %d entries, want exactly 1", len(ev.Attestations))
@@ -92,7 +96,7 @@ func TestEvidenceBlockMatchesAssaywardContract(t *testing.T) {
 	if !att.Verified {
 		t.Error("Verified = false, want true for a validly signed fixture")
 	}
-	const wantNote = "kind=skill; smithmark agent capability attestation; signature valid"
+	const wantNote = "smithmark agent capability attestation; signature valid"
 	if att.SignatureNote != wantNote {
 		t.Errorf("SignatureNote = %q, want %q", att.SignatureNote, wantNote)
 	}
@@ -180,19 +184,24 @@ func TestEvidenceBlockSignatureNoteReflectsUnverified(t *testing.T) {
 	if ev.Attestations[0].Verified {
 		t.Error("Verified = true, want false for a tampered signature")
 	}
-	const wantNote = "kind=skill; smithmark agent capability attestation; signature invalid"
+	const wantNote = "smithmark agent capability attestation; signature invalid"
 	if ev.Attestations[0].SignatureNote != wantNote {
 		t.Errorf("SignatureNote = %q, want %q", ev.Attestations[0].SignatureNote, wantNote)
 	}
 }
 
-// TestEvidenceBlockRejectsSubjectWithoutExactlyOneDigest exercises the
-// STATEMENT_SUBJECT_INVALID error path: a report subject must carry exactly
-// one digest to fit assayward's ImageRef{Name, Digest} shape (U5). The report
-// is a normal valid report mutated by hand for this negative case, since
-// nothing in the verified pipeline itself can produce a zero or multi digest
+// TestEvidenceBlockRejectsSubjectWithoutDigest exercises the
+// STATEMENT_SUBJECT_INVALID error path: a report subject must carry at least
+// one digest to fit assayward's ArtifactRef{Digest DigestSet} shape (U5). The
+// report is a normal valid report mutated by hand for this negative case,
+// since nothing in the verified pipeline itself can produce a zero digest
 // subject.
-func TestEvidenceBlockRejectsSubjectWithoutExactlyOneDigest(t *testing.T) {
+//
+// A subject carrying several digests is no longer a negative case:
+// ArtifactRef.Digest is a map, so multiple algorithms are valid and all of
+// them must survive into the block, which this test also asserts by decoding
+// the result through the pinned assayward core.DecodeEvidence.
+func TestEvidenceBlockRejectsSubjectWithoutDigest(t *testing.T) {
 	report, bundleBytes := validSkillReport(t)
 
 	report.Subject.Digest = manifest.DigestSet{}
@@ -206,13 +215,19 @@ func TestEvidenceBlockRejectsSubjectWithoutExactlyOneDigest(t *testing.T) {
 	}
 
 	report.Subject.Digest = manifest.DigestSet{"sha256": "aa", "sha512": "bb"}
-	if _, err := report.EvidenceBlock(bundleBytes); err == nil {
-		t.Error("EvidenceBlock did not error on a subject with two digests")
-	} else {
-		var coded *codes.Error
-		if !errors.As(err, &coded) || coded.Code != codes.StatementSubjectInvalid {
-			t.Errorf("error = %v, want a %s coded error", err, codes.StatementSubjectInvalid)
-		}
+	raw, err := report.EvidenceBlock(bundleBytes)
+	if err != nil {
+		t.Fatalf("EvidenceBlock errored on a subject with two digests, want success: %v", err)
+	}
+	ev, err := assaywardcore.DecodeEvidence(raw)
+	if err != nil {
+		t.Fatalf("decoding multi digest Evidence block via the pinned assayward core.DecodeEvidence: %v", err)
+	}
+	if got, want := ev.Artifact.Digest["sha256"], "aa"; got != want {
+		t.Errorf("Artifact.Digest[%q] = %q, want %q", "sha256", got, want)
+	}
+	if got, want := ev.Artifact.Digest["sha512"], "bb"; got != want {
+		t.Errorf("Artifact.Digest[%q] = %q, want %q", "sha512", got, want)
 	}
 }
 

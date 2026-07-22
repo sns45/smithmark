@@ -56,18 +56,22 @@
   ],
   "findings": [],
   "evidence": {
-    "image": {
+    "artifact": {
+      "kind": "skill",
       "name": "hello-skill",
-      "digest": "smithmark-bundle-v1:a4bdaaa7fd43eeca9269a369f0be3c87a9dedc8e052872064ad19ed26e27edda"
+      "digest": {
+        "smithmark-bundle-v1": "a4bdaaa7fd43eeca9269a369f0be3c87a9dedc8e052872064ad19ed26e27edda"
+      }
     },
     "attestations": [
       {
         "predicateType": "https://in8.sh/attestation/agent-capability/v1",
         "envelope": "eyJwYXlsb2FkIjoiZXlKZmRIbHdaU0k2SW1oMGRIQnpPaTh2YVc0dGRHOTBieTVwYnk5VGRHRjBaVzFsYm5RdmRqRWlMQ0p3Y21Wa2FXTmhkR1VpT25zaVlYSjBhV1poWTNRaU9uc2lhMmx1WkNJNkluTnJhV3hzSWl3aWJtRnRaU0k2SW1obGJHeHZMWE5yYVd4c0lpd2ljMjkxY21ObElqb2liRzlqWVd3aUxDSjJaWEp6YVc5dUlqb2lNQzR4TGpBaWZTd2lZMkZ3WVdKcGJHbDBhV1Z6SWpwN0ltVnVkaUk2VzEwc0ltVjRaV01pT2x0ZExDSm1hV3hsYzNsemRHVnRJanBiWFN3aWJtVjBkMjl5YTBWbmNtVnpjeUk2VzEwc0luTmxZM0psZEhNaU9sdGRmU3dpWjJWdVpYSmhkR1ZrUVhRaU9pSXlNREkyTFRBM0xURTJWREF3T2pBd09qQXdXaUlzSW1kbGJtVnlZWFJ2Y2lJNmV5SnVZVzFsSWpvaWMyMXBkR2h0WVhKcklpd2lkbVZ5YzJsdmJpSTZJblJsYzNRaWZTd2ljMk5vWlcxaFZtVnljMmx2YmlJNklqRXVNQzR3SWl3aWMydHBiR3dpT25zaVpXNTBjbmxFYVdkbGMzUWlPbnNpYzJoaE1qVTJJam9pTVdGak5UazVZamsxTXpabE9EazRZamN3T1RjMFltUmhNakJpT0RSaE1HWmxNVEV3TVRWa1pEazFNakE1T1RrNU0yVTBNVGs0WWpkbVpEQXpOelk1WXlKOUxDSnBiblp2YTJWelZHOXZiSE1pT2x0ZExDSnpZM0pwY0hSeklqcGJleUprYVdkbGMzUWlPbnNpYzJoaE1qVTJJam9pWlROak5XUTNORGhtTnpaaE1ESmtPV000T0RWak1USmlNRE13TmpBNVpUUmlPR0l3TmpReU5ESXpPRGN4TUdFM056VmtOMkZpTTJFMk56QmxNelF4WVNKOUxDSnRiMlJsSWpvaWNtVm5kV3hoY2lJc0luQmhkR2dpT2lKeVpXWmxjbVZ1WTJWekwyNXZkR1Z6TG0xa0luMHNleUprYVdkbGMzUWlPbnNpYzJoaE1qVTJJam9pWkdVME9HRmhaakpqT0RCaU1HWmpZMkkwTmpJNE9EQmpNRGhsTVRsaE1EQmxOakkzTVdZMVlUbGhNR0V4TldFM05qTTVPR0l5WW1FeU5tVm1NemMyTXlKOUxDSnRiMlJsSWpvaVpYaGxZM1YwWVdKc1pTSXNJbkJoZEdnaU9pSnpZM0pwY0hSekwyZHlaV1YwTG5Ob0luMHNleUprYVdkbGMzUWlPbnNpYzJoaE1qVTJJam9pWkRRNVkyVTNZamxoTkdNMVlUZ3paREUxWXpRME1UUmhNMk00WkRFMk4yRTNNREUwTnpCbVlXUmhOVEF3WlRBek5UZzJaREJsWm1Vek5EVXpNemxqT1NKOUxDSnRiMlJsSWpvaWNtVm5kV3hoY2lJc0luQmhkR2dpT2lKemJXbDBhRzFoY21zdWVXRnRiQ0o5WFgxOUxDSndjbVZrYVdOaGRHVlVlWEJsSWpvaWFIUjBjSE02THk5cGJqZ3VjMmd2WVhSMFpYTjBZWFJwYjI0dllXZGxiblF0WTJGd1lXSnBiR2wwZVM5Mk1TSXNJbk4xWW1wbFkzUWlPbHQ3SW1ScFoyVnpkQ0k2ZXlKemJXbDBhRzFoY21zdFluVnVaR3hsTFhZeElqb2lZVFJpWkdGaFlUZG1aRFF6WldWallUa3lOamxoTXpZNVpqQmlaVE5qT0RkaE9XUmxaR000WlRBMU1qZzNNakEyTkdGa01UbGxaREkyWlRJM1pXUmtZU0o5TENKdVlXMWxJam9pYUdWc2JHOHRjMnRwYkd3aWZWMTkiLCJwYXlsb2FkVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5pbi10b3RvK2pzb24iLCJzaWduYXR1cmVzIjpbeyJzaWciOiJNRVFDSUhrMHQ3dE0xbUxGNnBOK0N0Y1lOM1V0a05GTXU0Z3hVeXhmYmJrTWx2M2pBaUF0UjVLalhBUlUycUFsSUdyTTQ1RFB6aHA0TUUrbVFoRnExU0FreDlyK09BPT0ifV19",
         "verified": true,
-        "signatureNote": "kind=skill; smithmark agent capability attestation; signature valid"
+        "signatureNote": "smithmark agent capability attestation; signature valid"
       }
     ],
+    "schemaVersion": "0.2.0",
     "fetchedAt": "2026-07-16T12:00:00Z"
   },
   "verifiedAt": "2026-07-16T12:00:00Z"
