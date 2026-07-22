@@ -22,13 +22,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Pinned to the exact tagged assayward release whose CLI surface (the
-      # verify subcommand and its flags) was read from source
-      # (cmd/assayward/verify.go, cmd/assayward/inputs.go) and exercised
-      # locally while authoring this workflow.
+      # Pinned to assayward v0.2.0, whose --forgeseal-output adapter discovers
+      # SLSA/SBOM/VEX by CONTENT rather than fixed filenames (assayward#2), so
+      # this gate no longer needs the cp staging bridge the v0.1.0 adapter
+      # required. smithmark emits the v0.2.0 Evidence shape (ArtifactRef +
+      # schemaVersion), pinned by the cross-repo contract test.
       - name: Install assayward
         run: |
-          go install github.com/sns45/assayward/cmd/assayward@v0.1.0
+          go install github.com/sns45/assayward/cmd/assayward@v0.2.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       # This job runs in its own checkout with no filesystem in common with
@@ -49,34 +50,16 @@ jobs:
             --dir ./forgeseal-output \
             --clobber
 
-      # ------------------------------------------------------------------
-      # Honest gap, confirmed by building both forgeseal (pinned v0.5.1) and
-      # assayward (pinned v0.1.0) from source and running them against each
-      # other while authoring this workflow, recorded in full in the Task
-      # 6.2 report and the dated M6 note in docs/decisions.md:
-      #
-      # assayward v0.1.0's --forgeseal-output adapter
-      # (internal/forgeseal/adapter.go) reads three hardcoded filenames:
-      # slsa.sigstore-bundle.json (or slsa.intoto.jsonl as a fallback),
-      # sbom.cdx.json, and vex.openvex.json. forgeseal's actual pipeline
-      # command names its files after the SBOM instead
-      # (sbom.cdx.json.intoto.jsonl and
-      # sbom.cdx.json.intoto.jsonl.sigstore.json), and never emits
-      # vex.openvex.json unless --vex-triage runs, which this release
-      # workflow's pipeline invocation does not request. Run unmodified,
-      # assayward verify --forgeseal-output fails closed with "no such file
-      # or directory" rather than silently passing; the staging step below
-      # is a tested bridge for the filename mismatch, cp only, no invented
-      # forgeseal or assayward behavior. The VEX file is an empty
-      # statements stub, not a real vulnerability triage (the release
-      # pipeline does not run forgeseal's --vex-triage today), so the
-      # policy's VEX check passes vacuously, not from real OSV.dev data.
-      # ------------------------------------------------------------------
-      - name: Stage forgeseal output for assayward
-        run: |
-          cp ./forgeseal-output/sbom.cdx.json.intoto.jsonl.sigstore.json ./forgeseal-output/slsa.sigstore-bundle.json
-          printf '{"@context":"https://openvex.dev/ns/v0.2.0","@id":"smithmark-dogfood-stub","author":"smithmark release workflow","timestamp":"%s","version":1,"statements":[]}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ./forgeseal-output/vex.openvex.json
-
+      # No staging bridge needed anymore. assayward v0.2.0's --forgeseal-output
+      # adapter discovers forgeseal's real output by CONTENT: the SLSA
+      # provenance is found from its Sigstore bundle
+      # (sbom.cdx.json.intoto.jsonl.sigstore.json) directly, and a missing VEX
+      # is a soft skip rather than a hard error. The dogfood policy's VEX check
+      # (maxUnmitigatedSeverity) only denies on a CVE with status "affected";
+      # an absent VEX attestation yields zero affected CVEs, so the check
+      # passes exactly as the old empty-statements stub did — no real OSV.dev
+      # triage is claimed. This removes the cp-only bridge and the synthetic
+      # VEX file that assayward#2 was built to make unnecessary.
       - name: Compute dependency SBOM digest
         id: digest
         run: |
@@ -91,7 +74,7 @@ jobs:
       #
       # signature.required is false in the policy today, a scoped, not an
       # overstated, gap. assayward's engine runs its signature verifier
-      # over the staged SLSA bundle, and the native verifier
+      # over the discovered SLSA bundle, and the native verifier
       # (pkg/core/verify/sigstore_native.go) does have a real keyless path,
       # falling back to the Sigstore public good live TUF root and
       # verifying the Fulcio certificate chain plus Rekor inclusion when no
@@ -103,7 +86,7 @@ jobs:
       # establish that the keyless path fails too. Flip signature.required
       # (and the release checksums subject, which this gate does not
       # evaluate today) back to true once the first live tagged run
-      # confirms the staged SLSA bundle actually verifies keyless here; a
+      # confirms the discovered SLSA bundle actually verifies keyless here; a
       # cosign verify-blob style companion step is the future closure for
       # the release checksums themselves.
       - name: Assayward gate
