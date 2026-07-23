@@ -359,10 +359,16 @@ func TestVerifyDiscoveryFailedExitsThree(t *testing.T) {
 	}
 }
 
-// TestVerifyCertificateIdentityRejected proves keyless verification is accepted
-// but fails closed in v0.1: setting --certificate-identity exits 3 with
-// SIGNING_CONFIG_INVALID naming keyless verification as a later addition, never a silent ignore.
-func TestVerifyCertificateIdentityRejected(t *testing.T) {
+// ghKeylessIssuer is the OIDC issuer smithmark's keyless GitHub Actions signing
+// stamps and verification expects. Kept local to the keyless verify tests.
+const ghKeylessIssuer = "https://token.actions.githubusercontent.com"
+
+// TestVerifyKeylessRequiresBothCertFlags proves keyless verification is now
+// performed (v0.2.0), not deferred, and fails closed on a half specified
+// identity: setting only --certificate-identity exits 3 with
+// SIGNING_CONFIG_INVALID demanding both certificate flags, since a keyless
+// verification that pins only half the identity would be fail open.
+func TestVerifyKeylessRequiresBothCertFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	d := verifyDeps(t, &stdout, &stderr)
 
@@ -378,8 +384,97 @@ func TestVerifyCertificateIdentityRejected(t *testing.T) {
 	if line.Code != codes.SigningConfigInvalid {
 		t.Errorf("code = %q, want %q", line.Code, codes.SigningConfigInvalid)
 	}
-	if !strings.Contains(line.Detail, "keyless verification") {
-		t.Errorf("detail %q should name keyless verification as a later addition", line.Detail)
+	if !strings.Contains(line.Detail, "certificate-identity") || !strings.Contains(line.Detail, "certificate-oidc-issuer") {
+		t.Errorf("detail %q should demand both keyless certificate flags", line.Detail)
+	}
+}
+
+// TestVerifyKeylessAndTrustRootMutuallyExclusive proves the two trust modes
+// cannot be combined: passing both --trust-root (key based) and the keyless
+// certificate flags exits 3 with SIGNING_CONFIG_INVALID, rather than silently
+// preferring one, so an operator's contradictory invocation fails closed.
+func TestVerifyKeylessAndTrustRootMutuallyExclusive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+
+	code := runMain(d, []string{
+		"verify", skillFixturePath,
+		"--bundle", skillValidBundlePath,
+		"--trust-root", trustRootPath,
+		"--certificate-identity", "ci@example.com",
+		"--certificate-oidc-issuer", ghKeylessIssuer,
+	})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.SigningConfigInvalid {
+		t.Errorf("code = %q, want %q", line.Code, codes.SigningConfigInvalid)
+	}
+	if !strings.Contains(line.Detail, "mutually exclusive") {
+		t.Errorf("detail %q should name the two modes as mutually exclusive", line.Detail)
+	}
+}
+
+// TestVerifyKeylessKeyBasedBundleFailsClosed proves keyless verification is
+// actually performed and fails closed when handed a bundle that is not keyless.
+// The committed key based skill bundle carries no Fulcio certificate, so routing
+// it through the keyless path (both certificate flags set) rejects it before any
+// network work: SIGNATURE_VALID fails, the command exits 1, and no evidence is
+// attached. This is the honest offline proof that the keyless path does not fake
+// a pass; a real keyless bundle against live Fulcio/Rekor is proven by the
+// adopter re-release, out of scope for a unit test.
+func TestVerifyKeylessKeyBasedBundleFailsClosed(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+
+	code := runMain(d, []string{
+		"verify", skillFixturePath,
+		"--bundle", skillValidBundlePath,
+		"--certificate-identity", "ci@example.com",
+		"--certificate-oidc-issuer", ghKeylessIssuer,
+		"--output", "json",
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if findCheck(t, report, codes.SignatureValid).Passed {
+		t.Error("SIGNATURE_VALID passed for a key based bundle on the keyless path; keyless verification must fail closed")
+	}
+	if s := strings.TrimSpace(string(report.Evidence)); s != "null" && s != "" {
+		t.Errorf("evidence must be null when keyless verification fails, got: %s", report.Evidence)
+	}
+}
+
+// TestVerifyKeylessMalformedBundleFailsClosed proves a malformed keyless bundle
+// fails closed: garbage bundle bytes are not a sigstore bundle, so the keyless
+// path rejects them (SIGNATURE_VALID fails, exit 1) rather than crashing or
+// treating an unparseable bundle as verified. It reads no trust root and touches
+// no network, since the parse failure precedes trust resolution.
+func TestVerifyKeylessMalformedBundleFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	malformed := filepath.Join(dir, "malformed.sigstore.json")
+	if err := os.WriteFile(malformed, []byte("{ this is not a sigstore bundle"), 0o644); err != nil {
+		t.Fatalf("writing malformed bundle: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	d := verifyDeps(t, &stdout, &stderr)
+
+	code := runMain(d, []string{
+		"verify", skillFixturePath,
+		"--bundle", malformed,
+		"--certificate-identity", "ci@example.com",
+		"--certificate-oidc-issuer", ghKeylessIssuer,
+		"--output", "json",
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if findCheck(t, report, codes.SignatureValid).Passed {
+		t.Error("SIGNATURE_VALID passed for a malformed keyless bundle; it must fail closed")
 	}
 }
 

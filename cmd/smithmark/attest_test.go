@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -80,6 +81,119 @@ func (fakeSigner) SignStatement(_ context.Context, statement []byte, _ compose.S
 	return &compose.SignedBundle{Bundle: raw, MediaType: "application/vnd.dev.sigstore.bundle.v0.3+json"}, nil
 }
 
+// capturingSigner records the SignOptions the CLI hands it and returns a fake
+// bundle, so a test can assert the keyless wiring built the right SignOptions
+// without any real crypto or network.
+type capturingSigner struct{ opts *compose.SignOptions }
+
+func (c capturingSigner) SignStatement(_ context.Context, statement []byte, opts compose.SignOptions) (*compose.SignedBundle, error) {
+	*c.opts = opts
+	env := map[string]any{
+		"payloadType": compose.DSSEPayloadType,
+		"payload":     base64.StdEncoding.EncodeToString(statement),
+		"signatures":  []map[string]string{{"sig": base64.StdEncoding.EncodeToString([]byte("fake-signature"))}},
+	}
+	raw, err := json.Marshal(map[string]any{"dsseEnvelope": env})
+	if err != nil {
+		return nil, err
+	}
+	return &compose.SignedBundle{Bundle: raw, MediaType: "application/vnd.dev.sigstore.bundle.v0.3+json"}, nil
+}
+
+// TestAttestKeyAndKeylessMutuallyExclusive proves --key and --keyless cannot be
+// combined: the request fails closed with SIGNING_CONFIG_INVALID before any
+// pipeline work, never silently preferring one mode.
+func TestAttestKeyAndKeylessMutuallyExclusive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--key", "k.pem", "--keyless", skillFixturePath})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.SigningConfigInvalid {
+		t.Errorf("code = %q, want %q", line.Code, codes.SigningConfigInvalid)
+	}
+	if !strings.Contains(line.Detail, "mutually exclusive") {
+		t.Errorf("detail %q should name the two modes as mutually exclusive", line.Detail)
+	}
+}
+
+// TestAttestKeylessWithoutOIDCContextFailsClosed proves --keyless outside a
+// permitted GitHub Actions OIDC job fails closed with SIGNING_CONFIG_INVALID
+// naming the missing OIDC request env vars, never falling back to an interactive
+// flow CI cannot drive.
+func TestAttestKeylessWithoutOIDCContextFailsClosed(t *testing.T) {
+	// Ensure the ambient OIDC env is absent for this test regardless of the host.
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+
+	var stdout, stderr bytes.Buffer
+	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
+
+	code := runMain(d, []string{"attest", "--keyless", "--skip-sbom", skillFixturePath})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr: %s", code, stderr.String())
+	}
+	line := decodeErrLine(t, stderr.Bytes())
+	if line.Code != codes.SigningConfigInvalid {
+		t.Errorf("code = %q, want %q", line.Code, codes.SigningConfigInvalid)
+	}
+	if !strings.Contains(line.Detail, "ACTIONS_ID_TOKEN_REQUEST_URL") {
+		t.Errorf("detail %q should name the missing GitHub Actions OIDC context", line.Detail)
+	}
+}
+
+// TestAttestKeylessBuildsSignOptions proves the keyless wiring obtains the
+// ambient GitHub Actions OIDC token and builds a complete keyless SignOptions:
+// the Fulcio and Rekor endpoints, the GitHub OIDC issuer, and the fetched
+// identity token. A fixture transport serves the OIDC token endpoint, so no real
+// network is touched, and a capturing signer records the SignOptions the CLI
+// built rather than performing any real keyless signing.
+func TestAttestKeylessBuildsSignOptions(t *testing.T) {
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.example/oidc")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "request-token")
+
+	tr := newVerifyTransport(t)
+	tr.serve(http.MethodGet, "/oidc", http.StatusOK, []byte(`{"value":"minted-identity-token"}`))
+
+	var stdout, stderr bytes.Buffer
+	var captured compose.SignOptions
+	store := memory.New()
+	d := &deps{
+		SBOM:      fakeSBOM{result: goldenSBOMResult()},
+		Signer:    capturingSigner{opts: &captured},
+		NewTarget: func(_ context.Context, _ string) (oras.Target, error) { return store, nil },
+		Transport: tr,
+		Now:       func() time.Time { return fixedNow },
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+	}
+
+	code := runMain(d, []string{
+		"attest", "--keyless", "--skip-sbom",
+		"--attestation-base", "registry.example.com/attest",
+		skillFixturePath,
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if captured.KeyPath != "" {
+		t.Errorf("keyless SignOptions carried a KeyPath %q, want empty", captured.KeyPath)
+	}
+	if captured.IdentityToken != "minted-identity-token" {
+		t.Errorf("IdentityToken = %q, want the fetched token", captured.IdentityToken)
+	}
+	if captured.OIDCIssuerURL != githubOIDCIssuer {
+		t.Errorf("OIDCIssuerURL = %q, want %q", captured.OIDCIssuerURL, githubOIDCIssuer)
+	}
+	if captured.FulcioURL != defaultFulcioURL || captured.RekorURL != defaultRekorURL {
+		t.Errorf("Fulcio/Rekor = %q/%q, want the public good defaults %q/%q",
+			captured.FulcioURL, captured.RekorURL, defaultFulcioURL, defaultRekorURL)
+	}
+}
+
 // failingTarget is a NewTarget factory that fails the test if called, for the
 // dry-run and error path cases that must never reach publishing.
 func failingTarget(t *testing.T) func(context.Context, string) (oras.Target, error) {
@@ -143,7 +257,7 @@ func TestAttestOutputWritesSBOMSidecar(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	d := newDeps(t, &stdout, &stderr, fakeSBOM{result: goldenSBOMResult()})
 
-	if code := runMain(d, []string{"attest", "--output", out, skillFixturePath}); code != 0 {
+	if code := runMain(d, []string{"attest", "--key", "unused-by-fake-signer.pem", "--output", out, skillFixturePath}); code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
 	}
 
@@ -250,7 +364,7 @@ func TestAttestPushTerminus(t *testing.T) {
 		Stderr:    &stderr,
 	}
 
-	code := runMain(d, []string{"attest", "--attestation-base", "registry.example.com/attest", skillFixturePath})
+	code := runMain(d, []string{"attest", "--key", "unused-by-fake-signer.pem", "--attestation-base", "registry.example.com/attest", skillFixturePath})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
 	}

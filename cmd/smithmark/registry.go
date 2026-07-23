@@ -19,9 +19,9 @@ import (
 // informational so a lint gate has nothing to flag), no --bundle (an
 // explicit bundle makes no sense against a registry entry whose whole point
 // is discovering what the entry itself points at), and no
-// --certificate-identity or --certificate-oidc-issuer (keyless verification
-// fails closed the same way verify's does, and it lands with M6 regardless of
-// which command reaches it).
+// --certificate-identity or --certificate-oidc-issuer (keyless verification is a
+// verify concern; a registry entry's npm package is verified key based here, and
+// a keyless entry can always be verified directly with `smithmark verify`).
 type registryOptions struct {
 	attestationBase string
 	trustRoot       string
@@ -153,7 +153,7 @@ func buildRegistryReport(ctx context.Context, d *deps, entry *discover.RegistryE
 	if err != nil {
 		return nil, err
 	}
-	report, err := verifyDiscovered(d, disc, o.trustRoot)
+	report, err := verifyDiscovered(d, disc, trustConfig{trustRoot: o.trustRoot})
 	if err != nil {
 		return nil, err
 	}

@@ -27,3 +27,12 @@ func (stubVerifier) VerifyBundle(_, _ []byte, _ time.Time) ([]byte, bool, error)
 	return nil, false, codes.E(codes.SigningUnavailablePlatform,
 		"signature operations are unavailable on this platform; native builds only")
 }
+
+// VerifyKeylessBundle always fails closed with codes.SigningUnavailablePlatform,
+// mirroring VerifyBundle: sigstore-go does not compile under wasip1, so keyless
+// verification is refused rather than silently skipped. It never returns a
+// statement and never claims a verification it did not perform.
+func (stubVerifier) VerifyKeylessBundle(_, _ []byte, _, _ string, _ time.Time) ([]byte, bool, error) {
+	return nil, false, codes.E(codes.SigningUnavailablePlatform,
+		"keyless signature verification is unavailable on this platform; native builds only")
+}

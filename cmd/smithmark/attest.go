@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,9 +31,27 @@ const declFileName = "smithmark.yaml"
 // gives a maker's own stdio server to answer initialize and tools/list.
 const toolExtractionTimeout = 60 * time.Second
 
+// Public good Sigstore endpoint defaults for keyless signing (v0.2.0). The
+// --fulcio-url and --rekor-url flags default to these; an operator overrides them
+// only to target a private Sigstore deployment.
+const (
+	defaultFulcioURL = "https://fulcio.sigstore.dev"
+	defaultRekorURL  = "https://rekor.sigstore.dev"
+	// githubOIDCIssuer is the OIDC issuer GitHub Actions tokens are minted under.
+	// It is the issuer Fulcio validates the identity token against, so it is
+	// stamped into the keyless SignOptions verbatim.
+	githubOIDCIssuer = "https://token.actions.githubusercontent.com"
+	// sigstoreOIDCAudience is the audience a Sigstore keyless identity token must
+	// carry; Fulcio checks it, so the GitHub OIDC request asks for exactly it.
+	sigstoreOIDCAudience = "sigstore"
+)
+
 // attestOptions holds the parsed attest flag surface (spec 5).
 type attestOptions struct {
 	key             string
+	keyless         bool
+	fulcioURL       string
+	rekorURL        string
 	skipSBOM        bool
 	toolsFrom       string
 	attestationBase string
@@ -60,7 +82,10 @@ func newAttestCmd(d *deps) *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.key, "key", "", "path to a PEM encoded private key for offline signing")
+	f.StringVar(&o.key, "key", "", "path to a PEM encoded private key for offline signing (mutually exclusive with --keyless)")
+	f.BoolVar(&o.keyless, "keyless", false, "sign keyless with the ambient GitHub Actions OIDC identity through Fulcio and Rekor (mutually exclusive with --key)")
+	f.StringVar(&o.fulcioURL, "fulcio-url", defaultFulcioURL, "Fulcio certificate authority URL for keyless signing")
+	f.StringVar(&o.rekorURL, "rekor-url", defaultRekorURL, "Rekor transparency log URL for keyless signing")
 	f.BoolVar(&o.skipSBOM, "skip-sbom", false, "skip forgeseal dependency SBOM composition")
 	f.StringVar(&o.toolsFrom, "tools-from", "", "read the MCP tool listing from a JSON file instead of launching the server")
 	f.StringVar(&o.attestationBase, "attestation-base", "", "base OCI registry for the attestation ref (else SMITHMARK_ATTESTATION_BASE or package.json)")
@@ -76,6 +101,16 @@ func newAttestCmd(d *deps) *cobra.Command {
 // stamping, validation, statement assembly, and the dry-run, output, or push
 // terminus, is shared.
 func runAttest(ctx context.Context, d *deps, root string, o *attestOptions) error {
+	// Reject a contradictory signing mode before any pipeline work runs: --key
+	// and --keyless are mutually exclusive. The complementary "a real sign needs
+	// a mode" rule is enforced just before signing (below), so the pipeline's own
+	// errors keep their priority for a dry run and for failures that precede
+	// signing.
+	if o.key != "" && o.keyless {
+		return codes.E(codes.SigningConfigInvalid,
+			"attest: --key and --keyless are mutually exclusive; choose key based or keyless signing, not both")
+	}
+
 	decl, err := discover.LoadDeclared(filepath.Join(root, declFileName))
 	if err != nil {
 		return err
@@ -163,7 +198,16 @@ func runAttest(ctx context.Context, d *deps, root string, o *attestOptions) erro
 		return nil
 	}
 
-	signed, err := d.Signer.SignStatement(ctx, canonical, compose.SignOptions{KeyPath: o.key})
+	// A real sign (never reached by a dry run) requires exactly one signing mode.
+	if o.key == "" && !o.keyless {
+		return codes.E(codes.SigningConfigInvalid,
+			"attest: signing requires either --key for offline key based signing or --keyless for Sigstore keyless signing")
+	}
+	signOpts, err := buildSignOptions(ctx, d, o)
+	if err != nil {
+		return err
+	}
+	signed, err := d.Signer.SignStatement(ctx, canonical, signOpts)
 	if err != nil {
 		return err
 	}
@@ -410,6 +454,84 @@ func digestSetsEqual(a, b manifest.DigestSet) bool {
 		}
 	}
 	return true
+}
+
+// buildSignOptions selects the signing mode's SignOptions. Key based signing
+// (--key) needs only the key path; keyless signing (--keyless) obtains the
+// ambient GitHub Actions OIDC identity token and pairs it with the Fulcio and
+// Rekor endpoints and the GitHub OIDC issuer, which is everything
+// compose.signKeyless needs. Mutual exclusion and the "a real sign needs a mode"
+// rule were already enforced in runAttest, so by here exactly one mode applies.
+func buildSignOptions(ctx context.Context, d *deps, o *attestOptions) (compose.SignOptions, error) {
+	if !o.keyless {
+		return compose.SignOptions{KeyPath: o.key}, nil
+	}
+	token, err := githubActionsOIDCToken(ctx, d)
+	if err != nil {
+		return compose.SignOptions{}, err
+	}
+	return compose.SignOptions{
+		FulcioURL:     o.fulcioURL,
+		RekorURL:      o.rekorURL,
+		OIDCIssuerURL: githubOIDCIssuer,
+		IdentityToken: token,
+	}, nil
+}
+
+// githubActionsOIDCToken requests a Sigstore audience OIDC token from the ambient
+// GitHub Actions token service, the standard keyless CI identity flow: a GET to
+// $ACTIONS_ID_TOKEN_REQUEST_URL with audience=sigstore and an
+// Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN header, returning the
+// response's .value. When those two env vars are not both present the job is not
+// a permitted GitHub Actions OIDC context (it lacks `permissions: id-token:
+// write`), so this fails closed with a coded error naming the missing context
+// rather than falling back to an interactive browser flow, which CI cannot drive
+// (v0.2.0 targets CI). Every failure is coded SIGNING_CONFIG_INVALID: the caller
+// asked to sign but the keyless identity could not be obtained.
+func githubActionsOIDCToken(ctx context.Context, d *deps) (string, error) {
+	reqURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+	reqToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+	if reqURL == "" || reqToken == "" {
+		return "", codes.E(codes.SigningConfigInvalid,
+			"attest: --keyless needs the ambient GitHub Actions OIDC token, but ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN are not both set; run in a GitHub Actions job granting `permissions: id-token: write`")
+	}
+	u, err := url.Parse(reqURL)
+	if err != nil {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: ACTIONS_ID_TOKEN_REQUEST_URL is not a valid URL: %v", err)
+	}
+	q := u.Query()
+	q.Set("audience", sigstoreOIDCAudience)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: building the OIDC token request: %v", err)
+	}
+	req.Header.Set("Authorization", "bearer "+reqToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Transport: d.Transport}).Do(req)
+	if err != nil {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: requesting the GitHub Actions OIDC token: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: reading the OIDC token response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: the GitHub Actions OIDC token endpoint returned %s", resp.Status)
+	}
+	var parsed struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: decoding the OIDC token response: %v", err)
+	}
+	if parsed.Value == "" {
+		return "", codes.E(codes.SigningConfigInvalid, "attest: the GitHub Actions OIDC token response carried no token value")
+	}
+	return parsed.Value, nil
 }
 
 // pushAttestation resolves the deterministic attestation ref for ref, opens a
