@@ -86,15 +86,38 @@ func FailingChecksFailed(r *VerificationReport) bool {
 // Input is everything Run needs to verify one artifact. Ref is the identity and
 // digest the caller expects, resolved by discovery. Bundles are the candidate
 // attestation bundles, already fetched, evaluated in order. NPMProvenance is an
-// optional npm provenance bundle for the interop checks. TrustMaterial is a PEM
-// public key for the key based bundles of v0.1; the Sigstore TUF root lands in
-// M6. Now is the injected verification clock.
+// optional npm provenance bundle for the interop checks. Now is the injected
+// verification clock.
+//
+// Two mutually exclusive trust modes select how a candidate's signature is
+// verified. Key based (the offline, CI covered path): TrustMaterial is a PEM
+// public key and the keyless fields are empty. Keyless (Sigstore: GitHub OIDC to
+// Fulcio to Rekor, v0.2.0): CertificateIdentity and CertificateOIDCIssuer name
+// the signing identity the verified Fulcio certificate must carry, and a
+// candidate is verified against the Sigstore trusted root (the public good live
+// TUF root, or SigstoreTrustRoot when a JSON root is injected for an offline
+// test). keylessRequested selects the mode: any non empty certificate field
+// routes the candidate to VerifyKeylessBundle instead of VerifyBundle, and the
+// keyless path requires Rekor transparency log inclusion and a certificate
+// identity that matches, failing closed otherwise.
 type Input struct {
 	Ref           manifest.ArtifactRef
 	Bundles       [][]byte
 	NPMProvenance []byte
 	TrustMaterial []byte
 	Now           time.Time
+
+	// CertificateIdentity is the exact certificate SubjectAlternativeName the
+	// verified Fulcio leaf must carry (keyless mode). Its presence, together with
+	// CertificateOIDCIssuer, selects the keyless verification path.
+	CertificateIdentity string
+	// CertificateOIDCIssuer is the exact OIDC issuer the verified Fulcio leaf's
+	// issuer extension must carry (keyless mode).
+	CertificateOIDCIssuer string
+	// SigstoreTrustRoot is an optional Sigstore trusted root JSON injected for an
+	// offline keyless test. When empty, keyless verification uses the public good
+	// live TUF root, which contacts the network.
+	SigstoreTrustRoot []byte
 }
 
 // SignatureVerifier abstracts the sigstore stack so the pure core stays
@@ -105,8 +128,18 @@ type Input struct {
 type SignatureVerifier interface {
 	// VerifyBundle checks the bundle signature against trust material and
 	// returns the DSSE payload statement bytes plus whether a transparency
-	// log inclusion was cryptographically verified.
+	// log inclusion was cryptographically verified (key based mode).
 	VerifyBundle(bundle, trustMaterial []byte, now time.Time) (statement []byte, rekorIncluded bool, err error)
+	// VerifyKeylessBundle verifies a keyless (Sigstore Fulcio plus Rekor) bundle
+	// against the Sigstore trusted root, enforcing that the verified certificate's
+	// SubjectAlternativeName equals certificateIdentity and its OIDC issuer equals
+	// certificateOIDCIssuer, and that a Rekor transparency log inclusion was
+	// verified. sigstoreTrustRoot is an optional trusted root JSON; empty means
+	// the public good live TUF root. It returns the DSSE payload statement bytes
+	// and whether a transparency log inclusion was verified (always true on
+	// success, since inclusion is required). It fails closed on any mismatch,
+	// missing certificate identity, or absent inclusion.
+	VerifyKeylessBundle(bundle, sigstoreTrustRoot []byte, certificateIdentity, certificateOIDCIssuer string, now time.Time) (statement []byte, rekorIncluded bool, err error)
 }
 
 // Run verifies one artifact and returns its report. It returns a non nil error
@@ -359,6 +392,26 @@ func extractDSSEParts(bundleBytes []byte) (dsseParts, error) {
 	return parts, nil
 }
 
+// keylessRequested reports whether the caller asked for keyless verification.
+// Either certificate field being set selects the keyless path; the CLI requires
+// both to be set together, so a single field here still routes to the keyless
+// verifier, which fails closed on the empty half rather than silently accepting
+// a half specified identity.
+func keylessRequested(in Input) bool {
+	return in.CertificateIdentity != "" || in.CertificateOIDCIssuer != ""
+}
+
+// verifyCandidateSignature dispatches a single candidate to the key based or the
+// keyless verifier by the input's trust mode. It is the one place the mode is
+// chosen, so both the presence stage and evaluateCandidate agree on which path
+// runs, and neither the key based nor the keyless contract is duplicated.
+func verifyCandidateSignature(in Input, bundleBytes []byte, sv SignatureVerifier) ([]byte, bool, error) {
+	if keylessRequested(in) {
+		return sv.VerifyKeylessBundle(bundleBytes, in.SigstoreTrustRoot, in.CertificateIdentity, in.CertificateOIDCIssuer, in.Now)
+	}
+	return sv.VerifyBundle(bundleBytes, in.TrustMaterial, in.Now)
+}
+
 // evaluateCandidate runs the full stage pipeline for a single bundle and
 // returns the eight non presence checks, whether the candidate passed every
 // failing class cryptographic stage, and a non nil configuration error when the
@@ -370,8 +423,11 @@ func evaluateCandidate(in Input, bundleBytes []byte, sv SignatureVerifier) (map[
 	}
 
 	// Signature stage. The verifier owns all cryptography; a config or platform
-	// error is propagated to Run rather than recorded as a check failure.
-	stmtBytes, rekorIncluded, err := sv.VerifyBundle(bundleBytes, in.TrustMaterial, in.Now)
+	// error is propagated to Run rather than recorded as a check failure. The
+	// trust mode (key based or keyless) is selected by the input, never by the
+	// candidate: an operator asking for keyless verification of a key based
+	// bundle gets a fail closed SIGNATURE_VALID, not a silent downgrade.
+	stmtBytes, rekorIncluded, err := verifyCandidateSignature(in, bundleBytes, sv)
 	if err != nil {
 		if isConfigError(err) {
 			return nil, false, err

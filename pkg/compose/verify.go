@@ -25,4 +25,19 @@ type Verifier interface {
 	// error; empty or unsupported trustMaterial is a coded
 	// codes.SigningConfigInvalid error.
 	VerifyBundle(bundle, trustMaterial []byte, now time.Time) (statement []byte, rekorIncluded bool, err error)
+
+	// VerifyKeylessBundle verifies a keyless (Sigstore Fulcio plus Rekor) bundle
+	// against the Sigstore trusted root and returns the DSSE payload together with
+	// whether a Rekor inclusion was verified. sigstoreTrustRoot is an optional
+	// trusted root JSON injected for offline tests; empty means the public good
+	// live TUF root, which contacts the network. It enforces, failing closed, that
+	// the verified Fulcio certificate's SubjectAlternativeName equals
+	// certificateIdentity, its OIDC issuer equals certificateOIDCIssuer, a Rekor
+	// transparency log inclusion was verified, and the bundle carries a
+	// certificate identity at all. An unparseable injected trusted root, or an
+	// unreachable live root, is a coded codes.SigningConfigInvalid error (the
+	// verification could not be attempted); any other failure, including a wrong
+	// identity, an absent inclusion, or a key based bundle handed to this path, is
+	// an ordinary verification error the core records as a failed SIGNATURE_VALID.
+	VerifyKeylessBundle(bundle, sigstoreTrustRoot []byte, certificateIdentity, certificateOIDCIssuer string, now time.Time) (statement []byte, rekorIncluded bool, err error)
 }
