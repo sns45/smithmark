@@ -43,6 +43,7 @@ type verifyOptions struct {
 	trustRoot             string
 	certificateIdentity   string
 	certificateOIDCIssuer string
+	sigstoreTrustRoot     string
 	output                string
 }
 
@@ -84,9 +85,10 @@ func newVerifyCmd(d *deps) *cobra.Command {
 	f.BoolVar(&o.strict, "strict", false, "exit 2 when a passing verification carries any UNDECLARED_ lint finding")
 	f.StringVar(&o.bundle, "bundle", "", "verify this explicit attestation bundle file instead of discovering one")
 	f.StringVar(&o.attestationBase, "attestation-base", "", "base OCI registry for attestation discovery (else SMITHMARK_ATTESTATION_BASE or package.json)")
-	f.StringVar(&o.trustRoot, "trust-root", "", "path to a PEM public key to verify key based bundles against; keyless verification against a Sigstore TUF trust root is a later addition")
-	f.StringVar(&o.certificateIdentity, "certificate-identity", "", "expected signing certificate identity for keyless verification (accepted; keyless verification is a later addition, not performed in v0.1)")
-	f.StringVar(&o.certificateOIDCIssuer, "certificate-oidc-issuer", "", "expected OIDC issuer for keyless verification (accepted; keyless verification is a later addition, not performed in v0.1)")
+	f.StringVar(&o.trustRoot, "trust-root", "", "path to a PEM public key to verify key based bundles against (mutually exclusive with the keyless certificate flags)")
+	f.StringVar(&o.certificateIdentity, "certificate-identity", "", "expected signing certificate identity (SubjectAlternativeName) for keyless verification; requires --certificate-oidc-issuer")
+	f.StringVar(&o.certificateOIDCIssuer, "certificate-oidc-issuer", "", "expected OIDC issuer for keyless verification; requires --certificate-identity")
+	f.StringVar(&o.sigstoreTrustRoot, "sigstore-trust-root", "", "path to a Sigstore trusted root JSON to verify keyless bundles against offline (default: the public good live TUF root)")
 	f.StringVar(&o.output, "output", outputSummary, "output format: summary or json")
 	return cmd
 }
@@ -100,13 +102,10 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 	if err := validateOutputFormat(o.output); err != nil {
 		return err
 	}
-	// Keyless verification is accepted but fails closed in v0.1: the cosign
-	// certificate flags are recognized so a caller's invocation is not rejected
-	// as unknown, but honoring them needs the Sigstore TUF trust root, which
-	// lands with M6. Fail closed here, never a silent ignore.
-	if o.certificateIdentity != "" || o.certificateOIDCIssuer != "" {
-		return codes.E(codes.SigningConfigInvalid,
-			"verify: keyless certificate verification is not supported in v0.1; keyless verification against a Sigstore trust root is a later addition")
+	// Select and validate the trust mode before any discovery, so a
+	// contradictory invocation fails closed early rather than after network work.
+	if err := validateVerifyTrustMode(o); err != nil {
+		return err
 	}
 
 	disc, err := discoverForVerification(ctx, d, arg, o.attestationBase, o.bundle)
@@ -114,7 +113,7 @@ func runVerify(ctx context.Context, d *deps, arg string, o *verifyOptions) error
 		return err
 	}
 
-	report, err := verifyDiscovered(d, disc, o.trustRoot)
+	report, err := verifyDiscovered(d, disc, verifyTrustConfig(o))
 	if err != nil {
 		return err
 	}
@@ -202,36 +201,104 @@ func discoverForVerification(ctx context.Context, d *deps, arg, attestationBase,
 	return discover.Resolve(ctx, arg, opts)
 }
 
+// trustConfig carries the verify trust mode selection into verifyDiscovered: a
+// key based PEM public key path, or a keyless certificate identity and issuer
+// with an optional injected Sigstore trusted root JSON. It decouples
+// verifyDiscovered from verifyOptions so `registry check`, which offers only the
+// key based --trust-root, reaches the same helper without inheriting the keyless
+// flags it deliberately omits.
+type trustConfig struct {
+	trustRoot             string
+	certificateIdentity   string
+	certificateOIDCIssuer string
+	sigstoreTrustRoot     string
+}
+
+// keyless reports whether the config selects the keyless trust mode: either
+// certificate field being set. validateVerifyTrustMode has already ensured both
+// are set together and that --trust-root is not also present, so this is a clean
+// binary selector by the time verifyDiscovered consults it.
+func (tc trustConfig) keyless() bool {
+	return tc.certificateIdentity != "" || tc.certificateOIDCIssuer != ""
+}
+
+// verifyTrustConfig projects the verify flag surface into a trustConfig.
+func verifyTrustConfig(o *verifyOptions) trustConfig {
+	return trustConfig{
+		trustRoot:             o.trustRoot,
+		certificateIdentity:   o.certificateIdentity,
+		certificateOIDCIssuer: o.certificateOIDCIssuer,
+		sigstoreTrustRoot:     o.sigstoreTrustRoot,
+	}
+}
+
+// validateVerifyTrustMode fails closed on a contradictory or half specified
+// trust mode before any discovery runs. Key based (--trust-root) and keyless
+// (the certificate flags) are mutually exclusive, and keyless requires both the
+// certificate identity and the OIDC issuer: a single certificate flag alone
+// would leave half the identity unpinned, which for keyless verification is fail
+// open, so it is refused. An injected --sigstore-trust-root is only meaningful in
+// keyless mode.
+func validateVerifyTrustMode(o *verifyOptions) error {
+	keyless := o.certificateIdentity != "" || o.certificateOIDCIssuer != ""
+	if keyless && o.trustRoot != "" {
+		return codes.E(codes.SigningConfigInvalid,
+			"verify: --trust-root (key based) and the keyless certificate flags are mutually exclusive; pass one trust mode, not both")
+	}
+	if keyless && (o.certificateIdentity == "" || o.certificateOIDCIssuer == "") {
+		return codes.E(codes.SigningConfigInvalid,
+			"verify: keyless verification requires both --certificate-identity and --certificate-oidc-issuer; a single flag leaves the signing identity half unpinned")
+	}
+	if !keyless && o.sigstoreTrustRoot != "" {
+		return codes.E(codes.SigningConfigInvalid,
+			"verify: --sigstore-trust-root applies only to keyless verification; set --certificate-identity and --certificate-oidc-issuer to use it")
+	}
+	return nil
+}
+
 // verifyDiscovered runs the pure verification core over disc and attaches the
 // assayward compatible evidence block when a candidate won (Task 3.4). Check
 // outcomes are decided in exactly one place regardless of which command
 // reached here (spec 3): both verify and registry check's npm continuation
 // (Task 3.6) call this rather than each running verify.Run by hand.
-func verifyDiscovered(d *deps, disc *discover.Discovered, trustRootPath string) (*verify.VerificationReport, error) {
-	// Trust material is required whenever bundles were discovered: v0.1 verifies
-	// key based bundles against a PEM public key named by --trust-root. Bundles
-	// present with no trust root is a configuration error naming the flag, never
-	// a silent skip of signature verification.
-	var trust []byte
-	if len(disc.Bundles) > 0 {
-		if trustRootPath == "" {
-			return nil, codes.E(codes.SigningConfigInvalid,
-				"%d attestation bundle(s) were discovered but no --trust-root was provided; v0.1 verifies key based bundles against a PEM public key (keyless verification against a Sigstore TUF trust root is a later addition)", len(disc.Bundles))
-		}
-		var err error
-		trust, err = os.ReadFile(trustRootPath)
-		if err != nil {
-			return nil, codes.E(codes.SigningConfigInvalid, "reading --trust-root %s: %v", trustRootPath, err)
-		}
-	}
-
-	report, err := verify.Run(verify.Input{
+func verifyDiscovered(d *deps, disc *discover.Discovered, tc trustConfig) (*verify.VerificationReport, error) {
+	// Trust material is required whenever bundles were discovered. Key based
+	// verification needs the PEM public key named by --trust-root; keyless
+	// verification needs the certificate identity and issuer (validated already)
+	// and reads an optional injected Sigstore trusted root JSON. Bundles present
+	// with neither trust mode configured is a configuration error naming both
+	// remedies, never a silent skip of signature verification.
+	in := verify.Input{
 		Ref:           disc.Ref,
 		Bundles:       disc.Bundles,
 		NPMProvenance: disc.NPMProvenance,
-		TrustMaterial: trust,
 		Now:           d.Now().UTC(),
-	}, d.Verifier)
+	}
+	if len(disc.Bundles) > 0 {
+		if tc.keyless() {
+			in.CertificateIdentity = tc.certificateIdentity
+			in.CertificateOIDCIssuer = tc.certificateOIDCIssuer
+			if tc.sigstoreTrustRoot != "" {
+				rootJSON, err := os.ReadFile(tc.sigstoreTrustRoot)
+				if err != nil {
+					return nil, codes.E(codes.SigningConfigInvalid, "reading --sigstore-trust-root %s: %v", tc.sigstoreTrustRoot, err)
+				}
+				in.SigstoreTrustRoot = rootJSON
+			}
+		} else {
+			if tc.trustRoot == "" {
+				return nil, codes.E(codes.SigningConfigInvalid,
+					"%d attestation bundle(s) were discovered but no trust material was provided; pass --trust-root for a key based bundle, or --certificate-identity and --certificate-oidc-issuer for a keyless bundle", len(disc.Bundles))
+			}
+			trust, err := os.ReadFile(tc.trustRoot)
+			if err != nil {
+				return nil, codes.E(codes.SigningConfigInvalid, "reading --trust-root %s: %v", tc.trustRoot, err)
+			}
+			in.TrustMaterial = trust
+		}
+	}
+
+	report, err := verify.Run(in, d.Verifier)
 	if err != nil {
 		return nil, err
 	}
