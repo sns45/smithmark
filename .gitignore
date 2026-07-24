@@ -4,5 +4,8 @@ bin/
 .superpowers/
 # Local runtime scratch (adopter test databases, never source).
 data/
+# IDE / editor project files.
+.idea/
+.vscode/
 # The compiled CLI, if a bare `go build` drops it at the repo root.
 /smithmark
