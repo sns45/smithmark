@@ -1,5 +1,9 @@
 # smithmark
 
+<p align="center">
+  <img src="assets/marketing/poster.png" alt="smithmark: a maker's mark for the agent's tools" width="340">
+</p>
+
 **Provenance and capability attestation for the agent tool supply chain: signed, verifiable maker's marks for MCP servers and skills.**
 
 smithmark is the smith's mark, the maker's stamp struck on a forged tool. It
