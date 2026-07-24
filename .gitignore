@@ -2,5 +2,7 @@ dist/
 bin/
 *.out
 .superpowers/
+# Local runtime scratch (adopter test databases, never source).
+data/
 # The compiled CLI, if a bare `go build` drops it at the repo root.
 /smithmark
