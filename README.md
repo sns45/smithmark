@@ -197,8 +197,21 @@ demo, including a misdeclared server blocked on its capability gap, is in
 
 ## Surfaces
 
-- **GitHub Action** ([`action/`](action/)): run `smithmark verify` against an
-  agent tool artifact as a supply chain check in CI.
+- **GitHub Action** (metadata in [`action.yml`](action.yml), docs and entrypoint
+  in [`action/`](action/)): run `smithmark verify` against an agent tool artifact
+  as a supply chain check in CI.
+
+  ```yaml
+  - uses: sns45/smithmark@v0.2.1
+    with:
+      ref: "better-call-claude@3.1.3"
+      certificate-identity: "https://github.com/sns45/better-call-claude/.github/workflows/smithmark-attest.yml@refs/tags/v3.1.3"
+      certificate-oidc-issuer: "https://token.actions.githubusercontent.com"
+  ```
+
+  The step exits 0 on a pass, 1 on a failed verification, 2 on a strict lint
+  gate, and 3 on an operational error, and writes the exact code to an
+  `exit-code` output. Full input reference: [`action/README.md`](action/README.md).
 - **Claude Code hook** ([`surfaces/claude-code-hook/`](surfaces/claude-code-hook/)):
   the reference runtime shim, a `PreToolUse` hook that gates MCP tool calls
   behind `smithmark verify` and returns an explainable allow or deny. Its offline

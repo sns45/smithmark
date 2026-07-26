@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify smithmark capability attestation
-        uses: sns45/smithmark/action@v0.2.0
+        uses: sns45/smithmark@v0.2.1
         with:
           ref: "@example-org/mcp-server-weather@1.4.0"
           attestation-base: "registry.example.com/attest"
@@ -46,7 +46,7 @@ jobs:
 
       - name: Verify smithmark capability attestation
         id: smithmark
-        uses: sns45/smithmark/action@v0.2.0
+        uses: sns45/smithmark@v0.2.1
         with:
           ref: "@example-org/mcp-server-weather@1.4.0"
           attestation-base: "registry.example.com/attest"
@@ -89,14 +89,14 @@ The step also writes its exact exit code to an `exit-code` output (`entrypoint.s
 
 Pin `version` to a specific tag such as `v0.2.0` for reproducible CI rather than relying on `latest`. A pinned tag downloads that exact release archive; `latest` resolves at run time and can change under you between runs.
 
-Pin the action ref the same way. `uses: sns45/smithmark/action@v0.2.0` in the examples above resolves to the tagged release; a mutable ref such as a branch name means a CI run can pick up a different action than the one you reviewed.
+Pin the action ref the same way. `uses: sns45/smithmark@v0.2.1` in the examples above resolves to the tagged release; a mutable ref such as a branch name means a CI run can pick up a different action than the one you reviewed.
 
 ## Offline and air gapped use
 
 Set `install-from` to skip the release download and the `go install` fallback entirely:
 
 ```yaml
-- uses: sns45/smithmark/action@v0.2.0
+- uses: sns45/smithmark@v0.2.1
   with:
     ref: "./my-skill"
     trust-root: "trust/smithmark-signing-key-pub.pem"
@@ -112,7 +112,7 @@ This is exactly how `action/entrypoint_test.sh` exercises the action: it builds 
 Keyless (Sigstore backed) verification is supported as of v0.2.0. Pass both `certificate-identity` (the expected SubjectAlternativeName, normally the signing workflow ref) and `certificate-oidc-issuer`, and the action verifies the bundle against the live Sigstore TUF trust root: the signature, a Rekor transparency log inclusion, and an exact match on both the certificate identity and the issuer. A half pinned identity is fail open, so passing only one of the two is refused.
 
 ```yaml
-- uses: sns45/smithmark/action@v0.2.0
+- uses: sns45/smithmark@v0.2.1
   with:
     ref: "better-call-claude@3.1.3"
     certificate-identity: "https://github.com/sns45/better-call-claude/.github/workflows/smithmark-attest.yml@refs/tags/v3.1.3"

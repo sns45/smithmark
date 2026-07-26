@@ -67,4 +67,4 @@ runs:
         SMITHMARK_OUTPUT: ${{ inputs.output }}
         SMITHMARK_INSTALL_FROM: ${{ inputs.install-from }}
         SMITHMARK_VERSION: ${{ inputs.version }}
-      run: bash "${{ github.action_path }}/entrypoint.sh"
+      run: bash "${{ github.action_path }}/action/entrypoint.sh"
