@@ -4,10 +4,23 @@ name: Assayward Release Gate
 # the release workflow (release.yml) produces and publishes the evidence,
 # this workflow evaluates the published release against
 # assayward-dogfood-policy.yaml in its own job, on its own trigger.
+# Triggered on the RELEASE WORKFLOW COMPLETING, not on `release: published`.
+# Two failure modes made the published-release trigger unusable, both observed:
+# when GoReleaser creates the release with GITHUB_TOKEN, GitHub suppresses the
+# resulting event (a token-created event never starts another workflow), so the
+# gate silently never ran; and when a maintainer creates the release by hand,
+# the event fires immediately, before GoReleaser has uploaded any evidence, so
+# the gate failed with "no assets to download". Keying off workflow_run orders
+# the gate strictly after the evidence exists, on either path.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to gate, for example v0.2.1"
+        required: true
 
 permissions:
   contents: read
@@ -15,8 +28,14 @@ permissions:
 jobs:
   assayward-gate:
     runs-on: ubuntu-latest
+    # A failed release publishes no evidence, so gating it is meaningless noise.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     steps:
+      # Check out the tag being gated, not the default branch, so the release is
+      # evaluated against the policy that shipped with it.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
 
       - uses: actions/setup-go@v5
         with:
@@ -41,9 +60,18 @@ jobs:
       - name: Download supply chain evidence from the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GATE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
         run: |
           mkdir -p ./forgeseal-output
-          tag="${GITHUB_REF#refs/tags/}"
+          # On workflow_run the triggering run was a tag push, so head_branch
+          # carries the tag name; GITHUB_REF here points at the default branch
+          # and must not be used. On a manual run the tag is an explicit input.
+          tag="${GATE_TAG}"
+          if [ -z "$tag" ]; then
+            echo "::error::assayward-gate: could not resolve the release tag to gate."
+            exit 1
+          fi
+          echo "Gating release ${tag}"
           gh release download "$tag" \
             --pattern "sbom.cdx.json*" \
             --pattern "checksums.txt*" \
