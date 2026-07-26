@@ -11,9 +11,9 @@
 // library alone (encoding/json plus encoding/base64): extracting the enveloped
 // statement's predicateType needs no protobuf types and no cryptography, so it
 // stays inside the purity guard without an extra interface hop. Cryptographic
-// verification of that provenance, which does need the Sigstore trust root,
-// lands in M6; until then NPM_PROVENANCE_VERIFIED is informational and reports
-// that it was not attempted.
+// verification of npm's own provenance is a separate concern and stays out of
+// scope, so NPM_PROVENANCE_VERIFIED is informational and reports that it was
+// not attempted.
 package verify
 
 import (
@@ -449,7 +449,7 @@ func evaluateCandidate(in Input, bundleBytes []byte, sv SignatureVerifier) (map[
 
 	// Transparency log inclusion, informational: key based offline bundles carry
 	// no entry, and an inclusion proof cannot be checked offline without the log
-	// key from the Sigstore trust root (M6).
+	// key from the Sigstore trust root. Keyless bundles report the real result.
 	if rekorIncluded {
 		set(codes.RekorInclusionValid, true, true, "")
 	} else {

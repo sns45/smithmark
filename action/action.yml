@@ -21,15 +21,15 @@ inputs:
     required: false
     default: ""
   trust-root:
-    description: "Path to a PEM public key to verify key based bundles against. The Sigstore TUF trust root form lands in M6. Maps to --trust-root."
+    description: "Path to a PEM public key to verify key based bundles against. Mutually exclusive with the keyless certificate inputs. Maps to --trust-root."
     required: false
     default: ""
   certificate-identity:
-    description: "Expected signing certificate identity for keyless verification. Accepted but fails closed until M6 trust root support lands. Maps to --certificate-identity."
+    description: "Expected signing certificate identity (SubjectAlternativeName) for keyless verification. Requires certificate-oidc-issuer and is mutually exclusive with trust-root. Maps to --certificate-identity."
     required: false
     default: ""
   certificate-oidc-issuer:
-    description: "Expected OIDC issuer for keyless verification. Accepted but fails closed until M6 trust root support lands. Maps to --certificate-oidc-issuer."
+    description: "Expected OIDC issuer for keyless verification, for example https://token.actions.githubusercontent.com. Requires certificate-identity and is mutually exclusive with trust-root. Maps to --certificate-oidc-issuer."
     required: false
     default: ""
   output:
@@ -41,7 +41,7 @@ inputs:
     required: false
     default: ""
   version:
-    description: "smithmark release version to download (for example v0.1.0) when install-from is empty, or latest. No smithmark release has shipped yet, so latest currently resolves to nothing; use install-from until a release exists, and pin a specific tag once one does."
+    description: "smithmark release version to download (for example v0.2.0) when install-from is empty, or latest. Pin a specific tag for reproducible CI rather than relying on latest."
     required: false
     default: "latest"
 

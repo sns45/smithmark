@@ -40,15 +40,16 @@ func NewVerifier() Verifier { return nativeVerifier{} }
 // bytes verification then parses, and whether a transparency log inclusion was
 // cryptographically verified.
 //
-// rekorIncluded is false in v0.1 and never an error when absent: key based
-// offline bundles carry no transparency entry at all, and verifying an
+// rekorIncluded is false on this key based path and never an error when absent:
+// key based offline bundles carry no transparency entry at all, and verifying an
 // inclusion proof offline needs the log's public key from the Sigstore trust
-// root, which only lands with the TUF trust material in M6. Even a bundle that
+// root. Keyless bundles are verified by VerifyKeylessBundle instead, which does
+// consult the trust root and does require a Rekor inclusion. Even a bundle that
 // did carry a tlog entry could not be cryptographically checked here without
 // that key, so this build reports rekorIncluded false rather than trusting an
 // unverified claim.
 func (nativeVerifier) VerifyBundle(bundle, trustMaterial []byte, now time.Time) ([]byte, bool, error) {
-	_ = now // the injected clock is consumed by certificate validity checks in M6.
+	_ = now // no certificate validity window to check on the key based path.
 
 	if len(trustMaterial) == 0 {
 		return nil, false, codes.E(codes.SigningConfigInvalid,

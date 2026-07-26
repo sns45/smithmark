@@ -41,7 +41,7 @@ func NewSigner() Signer { return nativeSigner{} }
 // SignStatement wraps statement in a DSSE envelope with payloadType
 // DSSEPayloadType and signs it with sigstore-go. A non empty opts.KeyPath
 // selects offline key based signing (the CI covered path); a complete set of
-// keyless inputs selects Fulcio OIDC signing (exercised live in M6). When
+// keyless inputs selects Fulcio OIDC signing (exercised live in CI). When
 // neither is configured it fails closed with codes.SigningConfigInvalid.
 func (nativeSigner) SignStatement(ctx context.Context, statement []byte, opts SignOptions) (*SignedBundle, error) {
 	content := &sign.DSSEData{Data: statement, PayloadType: DSSEPayloadType}
@@ -71,7 +71,7 @@ func keylessConfigured(opts SignOptions) bool {
 // signWithKey signs offline with a supplied PEM key. It passes no Rekor,
 // timestamp authority, certificate provider, or trusted root, so sign.Bundle
 // stores public key verification material and never touches the network: the
-// only mode a hermetic CI can exercise. Keyless signing in M6 adds the Rekor
+// only mode a hermetic CI can exercise. Keyless signing adds the Rekor
 // transparency log on top of this same DSSE flow.
 func signWithKey(ctx context.Context, content *sign.DSSEData, keyPath string) (*SignedBundle, error) {
 	keypair, err := newFileKeypair(keyPath)
@@ -86,8 +86,8 @@ func signWithKey(ctx context.Context, content *sign.DSSEData, keyPath string) (*
 }
 
 // signKeyless signs with an ephemeral key certified by Fulcio and records the
-// signature in Rekor. It contacts the network and is exercised live only in the
-// M6 release workflow; no offline test drives it.
+// signature in Rekor. It contacts the network and is exercised live in CI
+// release runs; no offline test drives it.
 func signKeyless(ctx context.Context, content *sign.DSSEData, opts SignOptions) (*SignedBundle, error) {
 	keypair, err := sign.NewEphemeralKeypair(nil)
 	if err != nil {

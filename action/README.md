@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify smithmark capability attestation
-        uses: sns45/smithmark/action@v0.1
+        uses: sns45/smithmark/action@v0.2.0
         with:
           ref: "@example-org/mcp-server-weather@1.4.0"
           attestation-base: "registry.example.com/attest"
@@ -46,7 +46,7 @@ jobs:
 
       - name: Verify smithmark capability attestation
         id: smithmark
-        uses: sns45/smithmark/action@v0.1
+        uses: sns45/smithmark/action@v0.2.0
         with:
           ref: "@example-org/mcp-server-weather@1.4.0"
           attestation-base: "registry.example.com/attest"
@@ -70,7 +70,7 @@ Because this is a composite action, the step's exit code propagates directly to 
 | `certificate-oidc-issuer` | No | | Expected OIDC issuer for keyless verification (v0.2.0). Requires `certificate-identity`; mutually exclusive with `trust-root`. Maps to `--certificate-oidc-issuer`. |
 | `output` | No | `summary` | Output format: `summary` or `json`. Maps to `--output`. |
 | `install-from` | No | | Has two meanings, tried in this order. First: a path to an already built, executable `smithmark` binary, used directly with no download and no network call at all. This is the offline escape hatch this action's own test suite relies on (see below). Second, only when the value is not an executable file: a module version or ref, passed to `go install github.com/sns45/smithmark/cmd/smithmark@<value>`, a real network call to the Go module proxy. Either way, setting `install-from` skips the release download step entirely. |
-| `version` | No | `latest` | `smithmark` release version to download (for example `v0.1.0`) when `install-from` is empty, or `latest`. See the caveat below: no release has shipped yet. |
+| `version` | No | `latest` | `smithmark` release version to download (for example `v0.2.0`) when `install-from` is empty, or `latest`. Pin a tag for reproducible CI; see the caveat below. |
 
 ## Exit code contract
 
@@ -87,16 +87,16 @@ The step also writes its exact exit code to an `exit-code` output (`entrypoint.s
 
 ## Version caveat
 
-As of this writing, `sns45/smithmark` has not published a release yet: `version: "latest"` currently resolves to nothing on the release download path, and the action falls back to `go install` (a real network call to the Go module proxy, not the release archive). Once a release ships, pin `version` to a specific tag such as `v0.1.0` for reproducible CI, rather than relying on `latest` or the `go install` fallback.
+Pin `version` to a specific tag such as `v0.2.0` for reproducible CI rather than relying on `latest`. A pinned tag downloads that exact release archive; `latest` resolves at run time and can change under you between runs.
 
-The action ref itself carries the same caveat: `uses: sns45/smithmark/action@v0.1` in the examples above is the intended stable form once the first tagged release ships, exactly like the `version` input. Until then, that tag does not exist, so an adopter using this action today must reference it by a branch name or a commit sha instead of `@v0.1`.
+Pin the action ref the same way. `uses: sns45/smithmark/action@v0.2.0` in the examples above resolves to the tagged release; a mutable ref such as a branch name means a CI run can pick up a different action than the one you reviewed.
 
 ## Offline and air gapped use
 
 Set `install-from` to skip the release download and the `go install` fallback entirely:
 
 ```yaml
-- uses: sns45/smithmark/action@v0.1
+- uses: sns45/smithmark/action@v0.2.0
   with:
     ref: "./my-skill"
     trust-root: "trust/smithmark-signing-key-pub.pem"
@@ -107,6 +107,16 @@ Set `install-from` to skip the release download and the `go install` fallback en
 
 This is exactly how `action/entrypoint_test.sh` exercises the action: it builds `smithmark` locally with `go build`, points `install-from` at that binary, and runs the entrypoint against the committed signed fixtures under `testdata/signature` and `testdata/skills`, asserting exit 0 on a validly signed skill and the appropriate nonzero exit on a tampered one and on a misdeclared one under `strict`. No network call is made anywhere in that test.
 
-## Keyless verification: not yet supported (M6)
+## Keyless verification
 
-`certificate-identity` and `certificate-oidc-issuer` are accepted inputs, mapped straight through to `smithmark verify`, but `smithmark` fails closed on them today rather than silently ignoring them: keyless (Sigstore Fulcio and Rekor backed) verification needs the Sigstore TUF trust root wiring, which lands in milestone M6. Passing either input currently exits 3 with an explanation. Only key based verification (`trust-root` pointing at a PEM public key) is supported in v0.1.
+Keyless (Sigstore backed) verification is supported as of v0.2.0. Pass both `certificate-identity` (the expected SubjectAlternativeName, normally the signing workflow ref) and `certificate-oidc-issuer`, and the action verifies the bundle against the live Sigstore TUF trust root: the signature, a Rekor transparency log inclusion, and an exact match on both the certificate identity and the issuer. A half pinned identity is fail open, so passing only one of the two is refused.
+
+```yaml
+- uses: sns45/smithmark/action@v0.2.0
+  with:
+    ref: "better-call-claude@3.1.3"
+    certificate-identity: "https://github.com/sns45/better-call-claude/.github/workflows/smithmark-attest.yml@refs/tags/v3.1.3"
+    certificate-oidc-issuer: "https://token.actions.githubusercontent.com"
+```
+
+The two trust modes are mutually exclusive: use `trust-root` (a PEM public key) for key based offline bundles, or the two certificate inputs for keyless. Verifying npm's own SLSA provenance stays out of scope; `NPM_PROVENANCE_VERIFIED` reports as not attempted.

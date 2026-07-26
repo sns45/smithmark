@@ -146,8 +146,8 @@ func runAttest(ctx context.Context, d *deps, root string, o *attestOptions) erro
 		// covered by the signature. A dry run writes nothing to disk even when
 		// --output is also passed, so the sidecar is gated on not being a dry
 		// run. When pushing instead (no --output), the locator is left empty
-		// on purpose: SBOM publication and locator assignment land with M3
-		// discovery or M6 release wiring (D2).
+		// on purpose: SBOM publication and locator assignment are a separate
+		// concern from attestation (D2).
 		if o.output != "" && !o.dryRun {
 			sbomPath := o.output + ".sbom.json"
 			if err := os.WriteFile(sbomPath, res.BOM, 0o644); err != nil {

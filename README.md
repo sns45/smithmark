@@ -16,8 +16,10 @@ ecosystem attests who built these artifacts, what they are capable of, or
 whether what they declare matches what their code can do. smithmark produces
 that missing evidence. A policy engine consumes it.
 
-> Status: v0.1. The first tagged release is pending; there is no published
-> release yet. Everything below runs from a source checkout today.
+> Status: v0.2.0, released, with keyless Sigstore signing and verification
+> (Fulcio certificate, Rekor transparency log). Two MCP servers publish a
+> smithmark attestation on every release; both verify with stock `cosign`,
+> Rekor inclusion included.
 
 ## What smithmark is
 
@@ -239,24 +241,29 @@ binaries:
 brew install --cask sns45/tap/smithmark
 ```
 
-The first tagged release is not out yet, so the cask above will not resolve
-until it ships. Until then, build from source:
+Or install the CLI directly with Go:
+
+```
+go install github.com/sns45/smithmark/cmd/smithmark@v0.2.0
+```
+
+To build from source:
 
 ```
 go build -o smithmark ./cmd/smithmark
 ```
 
-## Honest v0.1 scope and deferrals
+## Honest scope and deferrals
 
-A launch that overclaims is worse than one that is precise. What v0.1 does not do
-yet, on the record:
+A launch that overclaims is worse than one that is precise. What smithmark does
+not do yet, on the record, as of v0.2.0:
 
-- **Key based offline verification only.** v0.1 verifies key based offline
-  bundles against a PEM public key named by `--trust-root`. Keyless certificate
-  verification (Fulcio, the Sigstore TUF trust root), transparency log inclusion
-  proofs, and cryptographic verification of npm's own SLSA provenance are all
-  accepted as inputs but reported as not attempted; they land, exercised live,
-  with the first tagged release run, which is the maintainer's step.
+- **npm's own provenance is not cryptographically verified.** smithmark verifies
+  its own attestations in both trust modes: keyless (Fulcio certificate, Rekor
+  transparency log, with the certificate identity and OIDC issuer enforced by
+  exact match) and key based offline (a PEM public key named by `--trust-root`).
+  Verifying npm's own SLSA provenance attestation is a separate concern and stays
+  out of scope; `NPM_PROVENANCE_VERIFIED` reports as not attempted.
 - **The CLI is not an agent artifact the capability model represents.** smithmark
   ships as a Go binary. The v0.1 capability manifest model defines only the
   `mcp-server` and `skill` kinds; a CLI or binary kind does not exist, so
@@ -269,13 +276,12 @@ yet, on the record:
   artifact and it does not prove the absence of a capability. Dynamic import,
   `eval`, and similar constructs are known, tested false negatives. It is a
   signal for policy, not a guarantee.
-- **The assayward Evidence widening is filed, not landed.** smithmark emits an
-  Evidence block structurally compatible with assayward's, but the cross repo
-  work to widen assayward's `ImageRef` to a kind tagged `ArtifactRef`, add an
-  explicit `schemaVersion`, and carry lint findings in Evidence is tracked at
-  [sns45/assayward#1](https://github.com/sns45/assayward/issues/1). Until it
-  lands in a tagged assayward release, lint findings live only in smithmark's own
-  report surface, never in the Evidence handed to assayward.
+- **Lint findings reach assayward, but the gate does not yet decide on them.**
+  The cross repo Evidence widening ([sns45/assayward#1](https://github.com/sns45/assayward/issues/1))
+  landed in assayward v0.2.0, which smithmark now pins: the kind tagged
+  `ArtifactRef`, an explicit `schemaVersion`, and carried lint findings are all in
+  the Evidence smithmark hands over. Writing policy that gates on those findings
+  is the adopter's call, not something smithmark decides.
 
 ## License
 

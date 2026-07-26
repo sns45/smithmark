@@ -11,8 +11,8 @@ const DSSEPayloadType = "application/vnd.in-toto+json"
 // SignOptions selects the signing mode and carries its inputs. A non empty
 // KeyPath selects key based, offline signing: the CI covered path, which never
 // contacts a transparency log. The keyless fields drive Fulcio OIDC signing and
-// are exercised live only in the M6 release workflow, where signing also submits
-// to Rekor. When KeyPath is empty and the keyless inputs are incomplete, a
+// submit to Rekor, and are exercised live in CI release runs rather than in
+// offline unit tests. When KeyPath is empty and the keyless inputs are incomplete, a
 // native Signer fails closed with codes.SigningConfigInvalid rather than
 // guessing.
 type SignOptions struct {
@@ -24,7 +24,7 @@ type SignOptions struct {
 	// signing certificate from an OIDC identity (keyless mode).
 	FulcioURL string
 	// RekorURL is the Rekor transparency log the signature is submitted to
-	// (keyless mode, M6).
+	// (keyless mode).
 	RekorURL string
 	// OIDCIssuerURL is the OIDC issuer that vouches for the signing identity
 	// (keyless mode).

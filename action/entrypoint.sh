@@ -194,7 +194,7 @@ download_release() {
 # ---------------------------------------------------------------------------
 # 1. Resolve the smithmark binary: install-from wins, else download the
 #    release for the runner OS and arch, else go install as a documented
-#    fallback (today's practical path, since no release has shipped yet).
+#    fallback when no matching release archive is available.
 # ---------------------------------------------------------------------------
 if [[ -n "${SMITHMARK_INSTALL_FROM:-}" ]]; then
   if [[ -f "${SMITHMARK_INSTALL_FROM}" && -x "${SMITHMARK_INSTALL_FROM}" ]]; then

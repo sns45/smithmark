@@ -170,8 +170,9 @@ assert_exit "missing ref" 3 "${EXIT_4}"
 assert_contains "missing ref annotation" "::error::smithmark-action: the 'ref' input is required" "${OUTPUT_4}"
 
 # ---------------------------------------------------------------------------
-# Test 5: certificate-identity is accepted but fails closed (M6 caveat),
-# proving exit 3 is never masked and the operational annotation still fires.
+# Test 5: certificate-identity without certificate-oidc-issuer fails closed (a
+# half pinned identity is fail open, so it is refused), proving exit 3 is never
+# masked and the operational annotation still fires.
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Test 5: certificate-identity fails closed (expect exit 3) ==="
